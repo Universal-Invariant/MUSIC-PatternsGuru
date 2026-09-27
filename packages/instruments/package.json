@@ -1,0 +1,19 @@
+{
+  "name": "@mpg/instruments",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Instrument plugins (fretted, keyboard, wind) for MUSIC-PatternsGuru.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fretted": "./src/fretted.ts"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@mpg/core": "*"
+  }
+}
