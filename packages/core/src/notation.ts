@@ -15,6 +15,7 @@
  */
 
 import type { Pattern } from './pattern.js';
+import { degreeLabelForStep } from './pattern.js';
 import { pc, pcAdd, pcSub, type PitchClass } from './pitch-class.js';
 import { formatSpelling, spellInKey, spellingToPc, type Spelling } from './spelling.js';
 

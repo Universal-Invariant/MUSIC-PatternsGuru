@@ -91,13 +91,13 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
   if (toggles.connectors) {
     groups.push(...patternGroups(instrument, options.patterns, { layer: 'patterns' }));
     if (options.showOverlap && options.patterns.length >= 2) {
-      groups.push(overlapGroups(instrument, options.patterns[0]!, options.patterns[1]!));
+      groups.push(...overlapGroups(instrument, options.patterns[0]!, options.patterns[1]!));
     }
     if (options.showChordsInScale) {
       const scale = options.patterns.find((p) => p.kind === 'scale' || p.kind === 'mode');
       if (scale) {
         groups.push(
-          chordInScaleGroups(instrument, scale, {
+          ...chordInScaleGroups(instrument, scale, {
             size: options.chordSize ?? 4,
             minMembers: 3,
             kind: 'hull',

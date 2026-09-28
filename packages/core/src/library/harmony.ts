@@ -18,7 +18,7 @@ import {
 } from '../pattern.js';
 import { CHORD_TEMPLATES } from './chords.js';
 import { SCALE_TEMPLATES } from './scales.js';
-import { rootLabel } from './template.js';
+import { rootLabel, type Template } from './template.js';
 
 
 /** A chord built on one degree of a parent collection. */
@@ -217,11 +217,11 @@ const SYMBOL_SUFFIX: Record<string, string> = {
  */
 export function scalesContainingChord(
   chord: Pattern,
-  options: { templates?: readonly typeof SCALE_TEMPLATES[number]; maxResults?: number } = {},
-): { template: (typeof SCALE_TEMPLATES)[number]; transpositions: PitchClass[] }[] {
+  options: { templates?: readonly Template[]; maxResults?: number } = {},
+): { template: Template; transpositions: PitchClass[] }[] {
   const templates = options.templates ?? SCALE_TEMPLATES;
   const chordSet = new Set(patternPcs(chord));
-  const results: { template: (typeof SCALE_TEMPLATES)[number]; transpositions: PitchClass[] }[] = [];
+  const results: { template: Template; transpositions: PitchClass[] }[] = [];
   for (const t of templates) {
     const roots: PitchClass[] = [];
     for (let n = 0; n < 12; n++) {
