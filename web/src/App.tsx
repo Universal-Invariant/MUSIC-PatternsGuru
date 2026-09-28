@@ -17,7 +17,7 @@ import {
   type NotationMode,
   type Pattern,
 } from '@mpg/core';
-import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt } from '@mpg/core/library';
+import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt, parsePatternQuery } from '@mpg/core/library';
 import { INSTRUMENTS, listInstruments } from '@mpg/instruments';
 import { FretboardPresenter, FrameSvg, buildScene } from '@mpg/react';
 
@@ -40,6 +40,10 @@ export function App() {
   const [rootIdx, setRootIdx] = useState(2); // D
   const [scaleId, setScaleId] = useState(DEFAULT_SCALE);
   const [chordId, setChordId] = useState<string | null>(DEFAULT_CHORD);
+  /** Stacked chord overlays (item 5): each entry is a chord template id plus an
+   * optional degree offset for the root relative to the scale root (e.g. +1 =>
+   * C#dim over D phrygian dominant). Add/remove freely; order = draw order. */
+  const [overlayList, setOverlayList] = useState<{ chord: string; offset: number }[]>([]);
   const [secondScaleId, setSecondScaleId] = useState<string | null>(DEFAULT_SECOND_SCALE);
   const [mode, setMode] = useState<NotationMode>('tonal');
   const [paletteId, setPaletteId] = useState('tonal-default');
@@ -70,13 +74,26 @@ export function App() {
   }, [rootIdx, scaleId, chordId, secondScaleId]);
 
   const searched: Pattern | undefined = useMemo(() => {
-    const q = query.trim().toLowerCase().replace(/\s+/g, '');
-    if (!q) return undefined;
+    const trimmed = query.trim();
+    if (!trimmed) return undefined;
+    // Full free-text form first: "Gb maj7#11", "A harmonic minor"...
+    const parsed = parsePatternQuery(trimmed);
+    if (parsed) return parsed;
+    const q = trimmed.toLowerCase().replace(/\s+/g, '');
     const t =
       SCALE_TEMPLATES.find((x) => x.id === q || x.name.toLowerCase().replace(/\s+/g, '') === q) ??
       CHORD_TEMPLATES.find((x) => x.id === q || x.name.toLowerCase().replace(/\s+/g, '') === q);
     return t ? rootTemplateAt(t, rootIdx) : undefined;
   }, [query, rootIdx]);
+
+  const overlays: Pattern[] = useMemo(() => {
+    return overlayList.flatMap((o) => {
+      const t = CHORD_TEMPLATES.find((x) => x.id === o.chord);
+      if (!t) return [];
+      const rooted = rootTemplateAt(t, pcAdd(rootIdx, o.offset));
+      return [{ ...rooted, id: `${rooted.id}+${o.offset}` }];
+    });
+  }, [overlayList, rootIdx]);
 
   const windowCols = fretWindow === '0-12' ? 12 : fretWindow === '0-15' ? 15 : 24;
 
@@ -92,6 +109,7 @@ export function App() {
       chordSize,
       showOverlap: patterns.length >= 2,
       includeAllCandidates: allPositions,
+      overlayChords: overlays,
     });
   }, [
     instrument,
@@ -106,6 +124,7 @@ export function App() {
     showChordsInScale,
     chordSize,
     allPositions,
+    overlays,
   ]);
 
   const frame = useMemo(() => presenter.present(scene), [scene]);
@@ -185,7 +204,7 @@ export function App() {
             </label>
             <div className="row" style={{ marginTop: 8 }}>
               <label className="field">
-                Chord overlay
+                Root chord (shares scale root)
                 <select
                   value={chordId ?? ''}
                   onChange={(e) => setChordId(e.target.value || null)}
@@ -227,6 +246,48 @@ export function App() {
                 no template matches “{query}”
               </div>
             )}
+            <div className="field" style={{ marginTop: 10 }}>
+              <span style={{ display: 'block', marginBottom: 4 }}>Chord overlays (stack)</span>
+              {overlays.map((o, i) => (
+                <div key={`${o.id}-${i}`} className="overlay-row">
+                  <span className="overlay-name">{o.name}</span>
+                  <button
+                    className="overlay-remove"
+                    onClick={() => setOverlayList((list) => list.filter((_, j) => j !== i))}
+                    aria-label={`remove ${o.name}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div className="overlay-add">
+                <select
+                  id="overlay-chord-select"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const el = e.currentTarget;
+                    const sel = document.getElementById('overlay-offset-select') as HTMLSelectElement | null;
+                    if (el.value) {
+                      setOverlayList((list) => [...list, { chord: el.value, offset: Number(sel?.value ?? 0) }]);
+                      el.value = '';
+                    }
+                  }}
+                >
+                  <option value="">add chord…</option>
+                  {CHORD_TEMPLATES.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <select id="overlay-offset-select" defaultValue="0">
+                  {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => (
+                    <option key={n} value={n}>{n === 0 ? 'same root' : `+${n} st`}</option>
+                  ))}
+                </select>
+              </div>
+              {overlayList.length > 0 && (
+                <button className="overlay-clear" onClick={() => setOverlayList([])}>clear all</button>
+              )}
+            </div>
           </section>
 
           <section className="panel">

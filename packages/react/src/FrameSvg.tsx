@@ -119,6 +119,42 @@ function blobPath(points: readonly { x: number; y: number }[], inflate: number):
   return `${d} Z`;
 }
 
+
+function pointInPolygon(pt: { x: number; y: number }, poly: readonly { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i]!, b = poly[j]!;
+    if (a.y > pt.y !== b.y > pt.y && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x)
+      inside = !inside;
+  }
+  return inside;
+}
+
+/** Grid cell centres enclosed by a group's hull — used to reject foreign notes. */
+function cellsInsideHull(
+  points: readonly { x: number; y: number }[],
+  h: Hints,
+): Set<string> {
+  const out = new Set<string>();
+  if (points.length < 3) return out;
+  const minX = Math.min(...points.map((p) => p.x));
+  const maxX = Math.max(...points.map((p) => p.x));
+  const minY = Math.min(...points.map((p) => p.y));
+  const maxY = Math.max(...points.map((p) => p.y));
+  const c0 = Math.max(h.colStart, Math.floor((minX - h.padX) / h.cellW));
+  const c1 = Math.min(h.colEnd, Math.ceil((maxX - h.padX) / h.cellW));
+  const r0 = Math.max(h.rowStart, Math.floor((minY - h.padY) / h.cellH));
+  const r1 = Math.min(h.rowEnd, Math.ceil((maxY - h.padY) / h.cellH));
+  for (let row = r0; row <= r1; row++) {
+    for (let col = c0; col <= c1; col++) {
+      const cx = h.padX + (col - h.colStart) * h.cellW + h.cellW / 2;
+      const cy = h.padY + (row - h.rowStart) * h.cellH + h.cellH / 2;
+      if (pointInPolygon({ x: cx, y: cy }, points)) out.add(`${row}:${col}`);
+    }
+  }
+  return out;
+}
+
 function ConnectorShape({ c, h }: { c: RenderConnector; h: Hints }) {
   const { group, points, anchor } = c;
   const color = group.color;
@@ -172,11 +208,24 @@ function ConnectorShape({ c, h }: { c: RenderConnector; h: Hints }) {
     }
     case 'blob':
     default: {
+      // The blob is a smoothed convex hull of the *member* points only — it
+      // never grows beyond them, so notes outside the set stay outside the
+      // shape. `cellsInsideHull` gives the renderer an exact membership mask
+      // (used via data attributes for hit-testing/tooling).
       const hull = points.length > 3 ? convexHull(points) : [...points];
-      const d = blobPath(hull, Math.min(h.cellW, h.cellH) * 0.55);
+      const d = blobPath(hull, Math.min(h.cellW, h.cellH) * 0.45);
+      const mask = cellsInsideHull(hull, h);
       return (
         <g>
-          <path d={d} fill={color} fillOpacity={0.12} stroke={color} strokeOpacity={0.6} strokeWidth={2} />
+          <path
+            d={d}
+            fill={color}
+            fillOpacity={0.12}
+            stroke={color}
+            strokeOpacity={0.6}
+            strokeWidth={2}
+            data-members={Array.from(mask).join(' ')}
+          />
         </g>
       );
     }

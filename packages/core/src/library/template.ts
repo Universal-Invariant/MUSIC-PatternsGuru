@@ -14,6 +14,7 @@ import {
   type PatternKind,
 } from '../pattern.js';
 import { pc, type PitchClass } from '../pitch-class.js';
+import { spelling, type Spelling } from '../spelling.js';
 
 export interface Template {
   readonly id: string;
@@ -58,20 +59,62 @@ export function template(input: {
   };
 }
 
+/**
+ * Letter anchor for each pitch class. Index = pitch class; value = preferred
+ * (letter-step, alteration) pair. Flat-side classes (Db/Eb/Gb/Ab/Bb) are spelled
+ * with flats — the standard convention when the root itself is a flat note —
+ * while sharp/natural classes keep sharps. Callers may override per-pattern.
+ */
+export const DEFAULT_ROOT_SPELLINGS: readonly Spelling[] = [
+  spelling(0, 0), // C
+  spelling(1, -1), // Db
+  spelling(1, 0), // D
+  spelling(2, -1), // Eb
+  spelling(2, 0), // E
+  spelling(3, 0), // F
+  spelling(4, 1), // F#
+  spelling(4, 0), // G
+  spelling(5, -1), // Ab
+  spelling(5, 0), // A
+  spelling(6, -1), // Bb
+  spelling(6, 0), // B
+];
+
 /** Attach a root to a template → concrete pattern. */
-export function root(t: Template, note: PitchClass | string = 0): Pattern {
-  const r = typeof note === 'number' ? pc(note) : parseRootShorthand(note);
+export function root(t: Template, note: PitchClass | string = 0, preferFlats = false): Pattern {
+  const parsed = typeof note === 'string' ? parseRootShorthandWithSpelling(note) : undefined;
+  const r = typeof note === 'number' ? pc(note) : parsed!.pc;
+  const rootSpelling = parsed?.spelling ?? DEFAULT_ROOT_SPELLINGS[r]!;
   return createPattern({
-    id: `${t.id}@${r}`,
-    name: `${rootLabel(r)} ${t.name}`,
+    id: `${t.id}@${r}${preferFlats ? '@flat' : ''}`,
+    name: `${rootLabel(r, preferFlats || rootSpelling.alteration < 0)} ${t.name}`,
     kind: t.kind,
     root: r,
     steps: t.steps,
     degrees: t.degrees,
+    rootSpelling,
     tags: t.tags,
     source: 'library',
     comment: t.comment,
   });
+}
+
+/** Parse a root token, preserving the *spelling* the user typed (`Eb` vs `D#`). */
+function parseRootShorthandWithSpelling(value: string): { pc: PitchClass; spelling: Spelling } {
+  const key = value
+    .trim()
+    .toLowerCase()
+    .replace(/\u266F/g, '#')
+    .replace(/\u266D/g, 'b');
+  const m = /^([a-g])([#b]*)$/.exec(key);
+  if (!m) return { pc: parseRootShorthand(value), spelling: DEFAULT_ROOT_SPELLINGS[parseRootShorthand(value)]! };
+  const LETTER_STEP: Record<string, number> = { c: 0, d: 1, e: 2, f: 3, g: 4, a: 5, b: 6 };
+  const step = LETTER_STEP[m[1]!]!;
+  let alteration = 0;
+  for (const ch of m[2] ?? '') alteration += ch === '#' ? 1 : -1;
+  const table = [0, 2, 4, 5, 7, 9, 11];
+  const pcs = ((table[step]! + alteration) % 12 + 12) % 12;
+  return { pc: pcs, spelling: { step, alteration } };
 }
 
 /** All distinct rooted copies of a template. */

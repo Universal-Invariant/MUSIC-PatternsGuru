@@ -13,7 +13,7 @@
  */
 
 import { pc, pcAdd, pcSub, type PitchClass } from './pitch-class.js';
-import { spellInKey, formatSpelling, type Spelling } from './spelling.js';
+import {spellInKey, formatSpelling, type Spelling, spellingToPc} from './spelling.js';
 import { intervalBySemitones, normalOrder } from './interval.js';
 
 /** Ordered list of absolute semitones above the pattern's anchor (first = 0). */
@@ -46,6 +46,12 @@ export interface Pattern {
   readonly steps: Steps;
   /** Optional spelled members (same length as `steps`) for letter/tonal notation. */
   readonly spellings?: readonly (Spelling | undefined)[];
+  /**
+   * How the root itself is spelled (`Bb` vs `A#`). Drives every member's letter:
+   * a flat-rooted pattern spells with flats, a sharp-rooted one with sharps, so
+   * `F lydian` shows `B\u266f` while `G mixolydian` shows `F\u266e`.
+   */
+  readonly rootSpelling?: Spelling;
   /** Parent collection this pattern was derived from (modes, diatonic chords). */
   readonly parentId?: string;
   /** Degree of `parent` that anchors this pattern (1-based). */
@@ -78,6 +84,8 @@ export interface CreatePatternInput {
   source?: PatternSource;
   comment?: string;
   degrees?: readonly DegreeAnnotation[];
+  /** Letter spelling of the anchor (e.g. `{step:3, alteration:-1}` = Fb). */
+  rootSpelling?: Spelling;
   parentId?: string;
   parentDegree?: number;
 }
@@ -85,7 +93,24 @@ export interface CreatePatternInput {
 export function createPattern(input: CreatePatternInput): Pattern {
   const root = pc(input.root ?? 0);
   const steps = normalizeSteps(input.steps);
-  const ordered = steps;
+  // Align degree annotations with the *normalized* step order. Pair-form
+  // annotations ([semitones, label]) are keyed by semitone so they survive
+  // sorting/deduping; bare-label lists are assumed to already match.
+  let alignedDegrees: readonly DegreeAnnotation[] | undefined;
+  if (input.degrees && input.degrees.length > 0) {
+    const pairForm = input.degrees.some((d) => Array.isArray(d));
+    if (!pairForm && input.degrees.length === steps.length) {
+      alignedDegrees = input.degrees;
+    } else if (pairForm) {
+      const byStep = new Map<number, DegreeAnnotation>();
+      for (const d of input.degrees) {
+        if (Array.isArray(d)) byPcSet(byStep, d[0], d);
+      }
+      alignedDegrees = steps.map((st) => byStep.get(st) ?? byStep.get(pc(st)) ?? degreeLabelForStep(st));
+    } else {
+      alignedDegrees = steps.map((_, i) => input.degrees![i] ?? degreeLabelForStep(steps[i]!));
+    }
+  }
   return {
     id: input.id ?? slugify(input.name),
     name: input.name,
@@ -98,10 +123,26 @@ export function createPattern(input: CreatePatternInput): Pattern {
     comment: input.comment,
     parentId: input.parentId,
     parentDegree: input.parentDegree,
-    spellings: input.degrees
-      ? input.degrees.map((d) => labelToSpelling(degreeLabelText(d)))
+    // Store degree-derived spellings *relative to C* (step = degree-1). The
+    // anchor point is supplied separately via `rootSpelling`; re-anchoring onto
+    // the actual root happens in `spellPattern`. Storing them relative to the
+    // root here would double-shift when anchored.
+    spellings: alignedDegrees
+      ? alignedDegrees.map((d) => labelToSpelling(degreeLabelText(d)))
       : undefined,
+    rootSpelling:
+      input.rootSpelling ??
+      // Degree-0 labels are always `1` -> labelToSpelling gives C-natural, which
+      // would clobber the actual anchor. Only trust a declared label that carries
+      // an accidental; otherwise the caller's root spelling wins.
+      (alignedDegrees?.[0] && degreeLabelText(alignedDegrees[0]) !== '1'
+        ? labelToSpelling(degreeLabelText(alignedDegrees[0]))
+        : undefined),
   };
+}
+
+function byPcSet(map: Map<number, DegreeAnnotation>, key: number, value: DegreeAnnotation): void {
+  if (!map.has(pc(key))) map.set(pc(key), value);
 }
 
 export function slugify(value: string): string {
@@ -306,11 +347,52 @@ export function complement(p: Pattern): Pattern {
  * spellings when no key is supplied. Presenters call this for letter notation.
  */
 export function spellPattern(p: Pattern, keyContext?: readonly PitchClass[]): Spelling[] {
-  if (p.spellings && p.spellings.length === p.steps.length && !keyContext) {
-    return p.spellings.map((s, i) => s ?? spellInKey(pcAdd(p.root, p.steps[i]!), [p.root]));
+  const rootSp = p.rootSpelling ?? p.spellings?.[0];
+  if (p.spellings && rootSp && p.spellings.length === p.steps.length) {
+    // Re-anchor template spellings onto the actual root's letter culture so
+    // `Eb dorian` spells C natural while `F# dorian` spells E# etc.
+    return p.steps.map((st, i) => {
+      const declared = p.spellings![i];
+      if (!declared) return spellInKey(pcAdd(p.root, st), keyContext ?? patternPcs(p));
+      return anchorSpelling(rootSp, declared, st, pcAdd(p.root, st));
+    });
   }
   const ctx = keyContext ?? patternPcs(p);
   return p.steps.map((s) => spellInKey(pcAdd(p.root, s), ctx));
+}
+
+/** Letter table for diatonic steps C D E F G A B. */
+const LETTER_PCS = [0, 2, 4, 5, 7, 9, 11];
+
+/**
+ * Place a declared member spelling relative to the root's chosen letter:
+ * the member keeps its *degree distance* from the root and absorbs the root's
+ * accidental culture (D harmonic minor -> C#, Eb mixolydian -> Db).
+ */
+function anchorSpelling(
+  rootSp: Spelling,
+  declared: Spelling,
+  stepAboveRoot: number,
+  memberPc?: PitchClass,
+): Spelling {
+  // Degree labels are C-relative (letter index with C=0), so the *letter
+  // distance above the root* is simply `declared.step`. The member's letter is
+  // then root letter + that distance, and its alteration is forced by the
+  // actual pitch class — exactly like reading a note off a staff.
+  const relStep = ((declared.step % 7) + 7) % 7;
+  const step = (((rootSp.step + relStep) % 7) + 7) % 7;
+  const naturalPc = LETTER_PCS[step]!;
+  const target = memberPc !== undefined ? pc(memberPc) : pc(stepAboveRoot);
+  let alteration = target - naturalPc;
+  if (alteration > 6) alteration -= 12;
+  if (alteration < -6) alteration += 12;
+  // Enharmonic tie-break (|alteration| == 6, e.g. C#/Db on degree B/C): prefer
+  // the accidental culture of the root when it yields a single accidental.
+  if (Math.abs(alteration) === 6 && Math.abs(rootSp.alteration) <= 1) {
+    const preferred = rootSp.alteration < 0 ? -6 : 6;
+    if (spellingToPc({ step, alteration: preferred }) === target) alteration = preferred;
+  }
+  return { step, alteration };
 }
 
 /** Textual step signature, e.g. `W-H-W-W-H-W-W` for major (H/W helpers). */

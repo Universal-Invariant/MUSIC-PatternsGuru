@@ -1,9 +1,6 @@
 node_modules/
+web/node_modules/
 dist/
 *.tsbuildinfo
-web/tsconfig.tsbuildinfo
 .DS_Store
-.env
-.vitepress/cache
-docs/.vitepress/cache
 coverage/

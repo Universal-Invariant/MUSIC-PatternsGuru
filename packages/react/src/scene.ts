@@ -10,6 +10,7 @@
 
 import {
   TONAL_PALETTE,
+  patternPcs as patternPcsList,
   defaultLayers,
   patternGroups,
   chordInScaleGroups,
@@ -57,13 +58,33 @@ export interface BuildSceneOptions {
   chordSize?: 3 | 4;
   /** Overlap/difference analysis between the first two patterns. */
   showOverlap?: boolean;
+  /**
+   * Chords stacked *on top of* the first (scale) pattern, e.g. C#dim under a
+   * D phrygian-dominant and Bmaj7#5 above it. Each chord gets its own colour
+   * ring, reduced opacity so the scale underneath stays readable, and a blob
+   * connector labelled with the chord name.
+   */
+  overlayChords?: readonly Pattern[];
   /** Extra semantic groups merged in after the computed ones. */
   extraGroups?: readonly RelationGroup[];
   includeAllCandidates?: boolean;
+  /** Per-pattern opacity/emphasis for the base patterns (overlay alpha is fixed). */
+  emphasis?: readonly number[];
   rootEffect?: Effect;
 }
 
 const EFFECT_ROOT_GLOW: Effect = { kind: 'glow', rate: 0.6, intensity: 0.9 };
+
+/** Distinct ring colours for stacked chord overlays. */
+const OVERLAY_COLORS = ['#ff5d8f', '#4dd0e1', '#aed581', '#ffb74d', '#b39ddb', '#f06292'];
+
+function positionsForPatternSafe(instrument: Instrument, pattern: Pattern): string[] {
+  const ids: string[] = [];
+  for (const p of patternPcsList(pattern)) {
+    for (const c of instrument.pitchClassToPositions(p)) if (c.preferred) ids.push(c.position.id);
+  }
+  return ids;
+}
 const EFFECT_NONE: Effect = { kind: 'none' };
 
 function layersFor(toggles: LayerToggle): RenderLayer[] {
@@ -93,6 +114,20 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     if (options.showOverlap && options.patterns.length >= 2) {
       groups.push(...overlapGroups(instrument, options.patterns[0]!, options.patterns[1]!));
     }
+    for (let i = 0; i < (options.overlayChords?.length ?? 0); i++) {
+      const chord = options.overlayChords![i]!;
+      const members = positionsForPatternSafe(instrument, chord);
+      if (members.length === 0) continue;
+      groups.push({
+        id: `overlay:${chord.id}:${i}`,
+        label: chord.name,
+        color: OVERLAY_COLORS[i % OVERLAY_COLORS.length]!,
+        kind: 'hull',
+        members,
+        layer: 'connectors',
+        meta: { overlay: true, root: chord.root },
+      });
+    }
     if (options.showChordsInScale) {
       const scale = options.patterns.find((p) => p.kind === 'scale' || p.kind === 'mode');
       if (scale) {
@@ -108,10 +143,21 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
   }
   const merged = mergeGroups(groups, [...(options.extraGroups ?? [])]);
 
+  // Overlay chords join the scene with reduced alpha so markers blend and the
+  // underlying scale shows through (item 6: transparency on overlays).
+  const overlays = options.overlayChords ?? [];
+  const allPatterns = [...options.patterns, ...overlays];
+  const allModes = [...modes, ...overlays.map(() => mode)];
+  const emphasis = [
+    ...options.patterns.map((_, i) => options.emphasis?.[i] ?? 1),
+    ...overlays.map(() => 0.82),
+  ];
+
   return {
     instrument,
-    patterns: options.patterns,
-    modes,
+    patterns: allPatterns,
+    modes: allModes.slice(0, allPatterns.length),
+    emphasis,
     palette: options.palette ?? TONAL_PALETTE,
     layers: layersFor(toggles),
     groups: merged,

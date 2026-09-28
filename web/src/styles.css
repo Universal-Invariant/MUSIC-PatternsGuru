@@ -288,3 +288,42 @@ footer.statusbar {
   padding: 20px 0;
   text-align: center;
 }
+
+/* Chord overlay stack editor */
+.overlay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+}
+.overlay-name { opacity: 0.9; }
+.overlay-remove {
+  border: none;
+  background: transparent;
+  color: #ff6b6b;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.overlay-add {
+  display: flex;
+  gap: 6px;
+}
+.overlay-add select { flex: 1; min-width: 0; }
+.overlay-clear {
+  margin-top: 6px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}

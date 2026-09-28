@@ -173,6 +173,37 @@ export function spellInKey(target: PitchClass, keyScale: readonly PitchClass[]):
 }
 
 /**
+ * Spell a pitch class *anchored to the root's letter choice*.
+ *
+ * The core enharmonic rule of this library: degree labels carry the diatonic
+ * letter distance from the root (`b7` = one step below the tonic's letter, `#4`
+ * = four steps above), and the root's own spelling decides sharp-vs-flat culture.
+ * So with root D natural: harmonic minor's step 11 is degree `7` -> C# (never Db);
+ * with root Eb: the same tone is degree `7` -> D natural; with root Bb: `b7` -> Ab.
+ * Falls back to minimal-alteration spelling when no anchor is available.
+ */
+export function rootAnchoredSpelling(
+  target: PitchClass,
+  relStepAboveRoot: number,
+  rootDegree: number,
+  rootAlteration: number,
+): Spelling {
+  const step = (((rootDegree - 1 + relStepAboveRoot) % 7) + 7) % 7;
+  const naturalPc = LETTER_SEMITONE[STEP_LETTER[step]!] ?? 0;
+  let alteration = pc(target) - naturalPc;
+  if (alteration > 6) alteration -= 12;
+  if (alteration < -6) alteration += 12;
+  // When two spellings are equally plausible (|alt| == 6 cannot happen here, but
+  // double-flats/sharps should be avoided unless the anchor forces them), nudge
+  // toward the anchor's accidental culture.
+  if (Math.abs(alteration) >= 2) {
+    const alt2 = alteration > 0 ? alteration - 12 : alteration + 12;
+    if (Math.abs(alt2) < Math.abs(alteration)) alteration = alt2;
+  }
+  return { step, alteration };
+}
+
+/**
  * Generic spelling resolver used by presenters: given a pc-set context (scale or
  * chord tones) produce a stable spelling for every member. Exported separately so
  * instrument presenters can request spellings without knowing about keys.

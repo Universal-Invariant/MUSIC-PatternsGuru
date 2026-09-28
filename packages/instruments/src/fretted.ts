@@ -140,9 +140,18 @@ export function createFrettedInstrument(config: FrettedConfig): Instrument {
     }
   }
 
-  // Mark exactly one preferred candidate per pitch class: lowest cost wins.
+  // Mark exactly one preferred candidate per pitch class: the *lowest playable
+  // position* wins — smallest MIDI number, ties broken toward lower-pitched
+  // strings (larger row). This is what makes single-shape views read as real
+  // box patterns anchored at the nut with open strings included (E ionian runs
+  // 0-2-4-5-7-9-11 on the low E string), instead of scattering notes across
+  // mid-neck "optimal" positions. `cost` remains available for UI ranking.
   for (const list of byPc.values()) {
-    list.sort((a, b) => a.cost - b.cost || a.position.row - b.position.row);
+    list.sort(
+      (a, b) =>
+        (a.position.midi ?? 0) - (b.position.midi ?? 0) ||
+        b.position.row - a.position.row,
+    );
     const first = list[0];
     if (first) list[0] = { ...first, preferred: true };
   }

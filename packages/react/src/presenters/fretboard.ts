@@ -11,6 +11,7 @@ import {
   defaultLayers,
   markerForNonMember,
   markerForPatternMember,
+  pc,
   pcAdd,
   pcSub,
   patternPcs,
@@ -86,10 +87,24 @@ interface Assignment {
 }
 
 /**
- * Compute per-position contents for a scene. Later patterns never overwrite an
- * existing root marker (roots always win), which gives overlaid patterns a
- * sensible priority without configuration.
+ * Compute per-position contents for a scene.
+ *
+ * Mapping strategy (the pitch -> position adjunction, made concrete):
+ *   - One marker per *pitch class* by default. The instrument engine ranks all
+ *     candidate positions by playability cost; we take the cheapest one, which
+ *     produces contiguous "box"-shaped patterns anchored on low strings and
+ *     including open strings (E ionian from low to high reads 0-2-3-4-5-7 on
+ *     the two lowest strings, exactly like a real first-position scale).
+ *   - `includeAllCandidates` lights up *every* position that can sound the note
+ *     — the full-fretboard view for shape-transposition study.
+ *   - Later patterns never overwrite an existing root marker (roots always win),
+ *     giving overlaid patterns a sensible priority without configuration.
  */
+/** True when an assignment's marker is that pattern's root/anchor. */
+function contentIsRoot(a: Assignment): boolean {
+  return a.content.isRoot;
+}
+
 function assignMarkers(
   instrument: Instrument,
   patterns: readonly Pattern[],
@@ -99,31 +114,23 @@ function assignMarkers(
   emphasis: readonly number[],
 ): Map<string, Assignment> {
   const out = new Map<string, Assignment>();
+  const takenPcs = new Set<number>(); // pc -> already has a primary marker (single-pos mode)
+
   patterns.forEach((pattern, idx) => {
     const mode = modes[idx] ?? modes[0] ?? 'tonal';
     const weight = emphasis[idx] ?? emphasis[0] ?? 1;
     const memberSteps = new Set(pattern.steps.map((s) => pcAdd(pattern.root, s)));
-    for (const p of instrument.positions()) {
-      if (p.midi === undefined) continue;
-      const binding = instrument.positionToPitch(p);
-      if (binding.kind !== 'exact') continue;
-      const step = pcSub(binding.midi, pattern.root);
-      if (!memberSteps.has(pcAdd(pattern.root, step))) continue;
 
-      if (!includeAllCandidates) {
-        const candidates = instrument.pitchClassToPositions(p.midi);
-        const isPreferred = candidates.some((c) => c.preferred && c.position.id === p.id);
-        if (!isPreferred) continue;
-      }
-
-      const stepIndex = pattern.steps.indexOf(step);
+    function place(p: Position, step: number): void {
+      let stepIndex = pattern.steps.indexOf(step);
+      if (stepIndex < 0) stepIndex = pattern.steps.indexOf(pc(step));
       const content = markerForPatternMember(pattern, stepIndex < 0 ? 0 : stepIndex, {
         mode,
         palette,
         keyContext: patternPcs(pattern),
       });
       const existing = out.get(p.id);
-      if (existing && existing.content.isRoot && !content.isRoot) continue;
+      if (existing && existing.content.isRoot && !content.isRoot) return;
       out.set(p.id, {
         position: p,
         content,
@@ -133,8 +140,59 @@ function assignMarkers(
         scale: content.isRoot ? 1.15 : 1,
       });
     }
+
+    if (!includeAllCandidates) {
+      // Single-position ("shape") view: for every pitch class in the pattern,
+      // take the engine's preferred candidate — the playability-ranked position
+      // (fewest frets, mid-neck, lower strings). This yields contiguous box
+      // shapes anchored where a real player would put their hand, including
+      // open strings: E ionian on guitar reads 0-2-4-5-7-9-11 on the low E
+      // string, 0-2 on A, 0-2 on D, 1-4 on G, 0-2 on B, and 0-2-4-5 on the
+      // high E string.
+      for (const step of pattern.steps) {
+        const targetPc = pcAdd(pattern.root, step);
+        if (takenPcs.has(targetPc)) continue;
+        const candidates = instrument.pitchClassToPositions(targetPc);
+        if (candidates.length === 0) continue;
+        const chosen = candidates.find((c) => c.preferred) ?? candidates[0]!;
+        // A position can already be owned by an earlier pattern (e.g. a chord
+        // overlay sharing tones with the scale). Roots win over non-members; if
+        // the slot is held by another pattern's root we keep it and place this
+        // pc at its next-best candidate so no note silently disappears.
+        let pos = chosen.position;
+        if (out.has(pos.id) && out.get(pos.id)!.patternId !== pattern.id) {
+          // Slot is owned by another pattern (e.g. chord overlay sharing tones
+          // with the scale). Prefer this pattern's next-best *free* candidate so
+          // every note of every stacked pattern stays visible.
+          const alt = candidates.find(
+            (c) => c.position.id !== pos.id && (!out.has(c.position.id) || out.get(c.position.id)!.patternId === pattern.id),
+          );
+          if (alt) pos = alt.position;
+        }
+        place(pos, step);
+        takenPcs.add(targetPc);
+      }
+      return;
+    }
+
+    // Full-fretboard view: iterate positions in performance order (low -> high)
+    // and light up every position that can sound a member pitch.
+    const allPositions = [...instrument.positions()]
+      .filter((p) => p.midi !== undefined && instrument.positionToPitch(p).kind === 'exact')
+      .sort((a, b) => (a.midi ?? 0) - (b.midi ?? 0));
+
+    for (const p of allPositions) {
+      const binding = instrument.positionToPitch(p);
+      if (binding.kind !== 'exact') continue;
+      const step = pcSub(binding.midi, pattern.root);
+      if (!memberSteps.has(pcAdd(pattern.root, step))) continue;
+
+      place(p, step);
+    }
   });
   return out;
+
+  // `place` is defined inside the per-pattern callback below via closure.
 }
 
 /** Resolve relation groups into connector point sets using layout geometry. */

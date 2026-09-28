@@ -15,9 +15,15 @@
  */
 
 import type { Pattern } from './pattern.js';
-import { degreeLabelForStep } from './pattern.js';
+import { degreeLabelForStep, patternPcs } from './pattern.js';
 import { pc, pcAdd, pcSub, type PitchClass } from './pitch-class.js';
-import { formatSpelling, spellInKey, spellingToPc, type Spelling } from './spelling.js';
+import {
+  formatSpelling,
+  rootAnchoredSpelling,
+  spellInKey,
+  spellingToPc,
+  type Spelling,
+} from './spelling.js';
 
 export type NotationMode = 'blind' | 'interval' | 'letter' | 'tonal';
 
@@ -111,9 +117,14 @@ export const MONO_PALETTE: Palette = {
 export const PALETTES: readonly Palette[] = [TONAL_PALETTE, CHROMATIC_PALETTE, MONO_PALETTE];
 
 /** Resolve the colour for a step relative to a root, honouring the palette. */
-export function colorForStep(step: number, palette: Palette, mode: NotationMode): string {
+export function colorForStep(
+  step: number,
+  palette: Palette,
+  mode: NotationMode,
+  preferredLabel?: string,
+): string {
   if (mode === 'blind') return palette.outside;
-  const label = degreeLabelForStep(pc(step));
+  const label = preferredLabel ?? degreeLabelForStep(pc(step));
   const direct = palette.degrees[label];
   if (direct) return direct;
   const bySemitone = palette.degrees[String(pc(step))];
@@ -135,10 +146,8 @@ export function markerForPatternMember(
   const step = pattern.steps[stepIndex] ?? 0;
   const memberPc = pcAdd(pattern.root, step);
   const isRoot = stepIndex === 0 || pcSub(memberPc, pattern.root) === 0;
-  const degree = degreeLabelForStep(pc(step));
-  const spelling = options.keyContext
-    ? spellInKey(memberPc, options.keyContext)
-    : (pattern.spellings?.[stepIndex] ?? spellInKey(memberPc, [pattern.root]));
+  const degree = patternDegrees(pattern)[stepIndex] ?? degreeLabelForStep(pc(step));
+  const spelling = spellingForMember(pattern, stepIndex, memberPc, options.keyContext);
 
   switch (options.mode) {
     case 'blind':
@@ -171,7 +180,7 @@ export function markerForPatternMember(
       return {
         text: degree,
         sub: formatSpelling(spelling),
-        fill: colorForStep(step, palette, 'tonal'),
+        fill: colorForStep(step, palette, 'tonal', degree),
         stroke: isRoot ? palette.root : palette.canvas,
         isRoot,
         degree,
@@ -222,4 +231,53 @@ export function renderPatternText(pattern: Pattern, mode: NotationMode): string 
   return pattern.steps
     .map((_, i) => markerForPatternMember(pattern, i, { mode }).text)
     .join(' ');
+}
+
+/**
+ * Degree labels for a pattern (`1 b3 5 b7`). When the pattern carries explicit
+ * spellings (library templates always do), labels are derived from the letter
+ * distance between each member's spelling and the root's — so `b9` vs `#2`,
+ * `#4` vs `b5`, and the harmonic-minor `7` fall out of real diatonic grammar
+ * instead of a semitone lookup table.
+ */
+export function patternDegrees(p: Pattern): string[] {
+  const rootSp = p.rootSpelling ?? p.spellings?.[0];
+  if (p.spellings && rootSp && p.spellings.length === p.steps.length) {
+    return p.steps.map((st, i) => {
+      const sp = p.spellings![i];
+      if (!sp) return degreeLabelForStep(pc(st));
+      const relDeg = (((sp.step - rootSp.step) % 7) + 7) % 7;
+      const delta = sp.alteration - rootSp.alteration;
+      const prefix = delta === 0 ? '' : delta < 0 ? 'b'.repeat(-delta) : '#'.repeat(delta);
+      return `${prefix}${relDeg + 1}`;
+    });
+  }
+  return p.steps.map((st) => degreeLabelForStep(pc(st)));
+}
+
+/**
+ * The enharmonic resolution rule, in priority order:
+ *   1. Explicit template spellings re-anchored onto the *root's* letter culture:
+ *      D harmonic minor spells its leading tone C# (degree 7 -> letter C), while
+ *      Eb dorian spells degree 6 as C natural, and Bb mixolydian spells b7 as Ab.
+ *   2. A caller-supplied key context (`spellInKey`).
+ *   3. Minimal-alteration spelling within the pattern's own pitch classes.
+ */
+function spellingForMember(
+  pattern: Pattern,
+  stepIndex: number,
+  memberPc: PitchClass,
+  keyContext?: readonly PitchClass[],
+): Spelling {
+  const declared = pattern.spellings?.[stepIndex];
+  const rootSp = pattern.rootSpelling ?? pattern.spellings?.[0];
+  if (declared && rootSp) {
+    // Template spellings are stored C-relative (letter index with C=0), so the
+    // member's *letter distance above the root* is just `declared.step` — do NOT
+    // subtract the root's step here or every label shifts a second time.
+    const relStep = ((declared.step % 7) + 7) % 7;
+    return rootAnchoredSpelling(memberPc, relStep, rootSp.step + 1, rootSp.alteration);
+  }
+  if (keyContext && keyContext.length > 0) return spellInKey(memberPc, keyContext);
+  return spellInKey(memberPc, patternPcs(pattern));
 }
