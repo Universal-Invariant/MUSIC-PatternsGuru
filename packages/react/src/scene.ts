@@ -68,6 +68,8 @@ export interface BuildSceneOptions {
   /** Extra semantic groups merged in after the computed ones. */
   extraGroups?: readonly RelationGroup[];
   includeAllCandidates?: boolean;
+  /** Global dot/text size multiplier (UI slider). */
+  markerScale?: number;
   /** Per-pattern opacity/emphasis for the base patterns (overlay alpha is fixed). */
   emphasis?: readonly number[];
   rootEffect?: Effect;
@@ -167,6 +169,7 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     window: options.window,
     showBackground: toggles.background,
     includeAllCandidates: options.includeAllCandidates ?? false,
+    markerScale: options.markerScale ?? 1,
   };
 }
 

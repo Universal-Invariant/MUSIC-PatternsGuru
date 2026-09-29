@@ -126,10 +126,27 @@ function assignMarkers(
     function place(p: Position, step: number): void {
       let stepIndex = pattern.steps.indexOf(step);
       if (stepIndex < 0) stepIndex = pattern.steps.indexOf(pc(step));
+      // Concrete linear pitch numbers for the label-rule engine (labels.ts):
+      // the sounding note at this position, and the root anchored to the same
+      // octave region (rootOfRegion below keeps every degree's label identical
+      // across octaves — pc distance from root is what tonal/interval/number
+      // modes display).
+      const midi = p.midi;
+      const rootOfRegion =
+        midi === undefined
+          ? undefined
+          : (() => {
+              const raw = midi - pc(step);
+              return ((raw % 12) + 12) % 12 === pc(pattern.root)
+                ? raw
+                : raw + ((((pc(pattern.root) - ((raw % 12) + 12) % 12) + 18) % 12) - 6);
+            })();
       let content = markerForPatternMember(pattern, stepIndex < 0 ? 0 : stepIndex, {
         mode,
         palette,
         keyContext: patternPcs(pattern),
+        pitchLinear: midi,
+        rootLinear: rootOfRegion,
       });
       // Root markers always carry the root's *note name* ("E", "Bb") as a
       // sub-label so the anchor is unambiguous in every notation mode. In
@@ -289,6 +306,8 @@ export class FretboardPresenter implements Presenter {
       scene.emphasis ?? [1],
       window,
     );
+    // User-controlled global dot/text size (the "marker size" slider in the UI).
+    const markerScale = scene.markerScale ?? 1;
 
     const markers: RenderMarker[] = [];
 
@@ -334,7 +353,7 @@ export class FretboardPresenter implements Presenter {
         groups: [...a.groups, ...extra],
         effect,
         alpha: outsideWindow ? Math.min(a.alpha, 0.28) : a.alpha,
-        scale: a.scale,
+        scale: a.scale * markerScale,
       });
     }
 

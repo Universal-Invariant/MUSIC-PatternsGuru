@@ -1,6 +1,17 @@
+# Dependencies
 node_modules/
+
+# Build artifacts and outputs
 dist/
+build/
 *.tsbuildinfo
+
+# Editor/IDE files
+.vscode/
+.idea/
+
+# System/Environment files
 .DS_Store
-coverage/
-.vitepress/cache/
+.env
+.env.local
+.env.*.local

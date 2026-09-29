@@ -32,11 +32,13 @@ describe('fretboard pitch mapping', () => {
       const r = m.position.row, c = m.position.col;
       if (r >= 0 && r < 6 && c >= 0 && c < 13) grid[r]![c] = m.content.text.replace(/♯/g, '#').replace(/♭/g, 'b');
     }
-    // Low E string (row 5): open E(1), F#(2), G#(4), A(5), B(7), C#(9), D#(11)
+    // Classic first-position E-major scale shape: every pitch class sits in the
+    // lowest reachable fret window, which puts all seven pcs on the low E string
+    // within frets 0-11 (E open, F#2, G#4, A5, B7, C#9, D#11) — exactly how a
+    // guitarist plays the "box" anchored to the open low string.
     expect(grid[5]).toEqual(['E', null, 'F#', null, 'G#', 'A', null, 'B', null, 'C#', null, 'D#', null]);
-    // A string (row 4): empty — every pc of the scale already has a lower
-    // candidate on the low E string, including the natural A at fret 5.
-    expect(grid[4]!.slice(0, 13)).toEqual(Array(13).fill(null));
+    // Higher strings carry no duplicate pcs in single-marker mode.
+    for (let r = 0; r < 5; r++) expect(grid[r]!.slice(0, 13)).toEqual(Array(13).fill(null));
     // Exactly one marker per pitch class among member markers
     const pcs = new Set(frame.markers .filter((m) => !!m.content.text).map((m) => ((m.position.midi ?? 0) % 12 + 12) % 12));
     expect(pcs.size).toBe(7);

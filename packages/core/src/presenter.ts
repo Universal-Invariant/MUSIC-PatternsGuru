@@ -132,6 +132,8 @@ export interface VisualizationScene {
   readonly showBackground?: boolean;
   /** Include every candidate position for a pitch, or only the preferred one. */
   readonly includeAllCandidates?: boolean;
+  /** Global size multiplier for pattern markers (dots AND their text). 1 = default. */
+  readonly markerScale?: number;
 }
 
 export interface ViewWindow {

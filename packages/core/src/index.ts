@@ -23,6 +23,21 @@ export * from './spelling.js';
 export * from './interval.js';
 export * from './pattern.js';
 export * from './notation.js';
+export {
+  labelFor,
+  setLabelRule,
+  defaultLabelRule,
+  chooseEnharmonic,
+  stepFromRoot,
+  linearPitchNumber,
+  TONAL_LABELS,
+  INTERVAL_LABELS,
+  NUMBER_LABELS,
+  ENHARMONIC_POOL,
+  labelOverride,
+  type LabelRequest,
+  type LabelRule,
+} from './labels.js';
 export * from './instrument.js';
 export * from './presenter.js';
 export * from './relations.js';

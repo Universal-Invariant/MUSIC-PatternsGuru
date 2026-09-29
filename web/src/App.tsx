@@ -46,6 +46,7 @@ export function App() {
   const [overlayList, setOverlayList] = useState<{ chord: string; offset: number }[]>([]);
   const [secondScaleId, setSecondScaleId] = useState<string | null>(DEFAULT_SECOND_SCALE);
   const [mode, setMode] = useState<NotationMode>('tonal');
+  const [markerScale, setMarkerScale] = useState(1);
   const [paletteId, setPaletteId] = useState('tonal-default');
   const [fretWindow, setFretWindow] = useState<'0-12' | '0-15' | '0-24'>('0-12');
   const [showChordsInScale, setShowChordsInScale] = useState(false);
@@ -102,6 +103,7 @@ export function App() {
     return buildScene(instrument, {
       patterns,
       mode,
+      markerScale,
       palette,
       window: { colStart: 0, colEnd: windowCols },
       toggles: { connectors, labels: true, background, effects: effectsOn },
@@ -303,6 +305,20 @@ export function App() {
                   {m}
                 </button>
               ))}
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
+              <label className="field grow">
+                Marker size <span className="mono">{markerScale.toFixed(2)}×</span>
+                <input
+                  id="marker-scale"
+                  type="range"
+                  min={0.5}
+                  max={1.6}
+                  step={0.05}
+                  value={markerScale}
+                  onChange={(e) => setMarkerScale(Number(e.target.value))}
+                />
+              </label>
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <label className="field">

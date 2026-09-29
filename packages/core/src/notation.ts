@@ -24,10 +24,31 @@ import {
   spellingToPc,
   type Spelling,
 } from './spelling.js';
+import { chooseEnharmonic, labelFor } from './labels.js';
 
-export type NotationMode = 'blind' | 'interval' | 'letter' | 'tonal';
+/**
+ * The classic four modes plus two new ones:
+ *   number — chromatic distance from the root, 0..11 (0 = root)
+ *   degree — scale-degree numbers 1..7 with #/b alterations
+ * All labelling is routed through `labelFor` in ./labels.js — EDIT THAT FILE
+ * to change what appears inside a fret dot.
+ */
+export type NotationMode =
+  | 'blind'
+  | 'interval'
+  | 'letter'
+  | 'tonal'
+  | 'number'
+  | 'degree';
 
-export const NOTATION_MODES: readonly NotationMode[] = ['blind', 'interval', 'letter', 'tonal'];
+export const NOTATION_MODES: readonly NotationMode[] = [
+  'blind',
+  'interval',
+  'letter',
+  'tonal',
+  'number',
+  'degree',
+];
 
 /** Everything a presenter needs to draw one marker. */
 export interface MarkerContent {
@@ -131,7 +152,14 @@ export function colorForStep(
   return bySemitone ?? palette.outside;
 }
 
-/** Build the marker content for one member of a pattern. */
+/** Build the marker content for one member of a pattern.
+ *
+ * All text comes from `labelFor` (packages/core/src/labels.ts — THE rules file
+ * you edit by hand). The presenter supplies concrete LINEAR pitch numbers
+ * (pitch + 12·octave, C0 = 0) of the sounding note and of an octave-anchored
+ * root, plus pattern context (name, steps, declared degree annotations), so
+ * your rules can consult everything needed to decide the fret-dot string.
+ */
 export function markerForPatternMember(
   pattern: Pattern,
   stepIndex: number,
@@ -140,6 +168,10 @@ export function markerForPatternMember(
     palette?: Palette;
     keyContext?: readonly PitchClass[];
     showNoteNamesUnderIntervals?: boolean;
+    /** Linear pitch number of the sounding note at this position (e.g. E2 = 28). */
+    pitchLinear?: number;
+    /** Linear pitch number of the pattern root in the same octave region. */
+    rootLinear?: number;
   },
 ): MarkerContent {
   const palette = options.palette ?? TONAL_PALETTE;
@@ -148,6 +180,40 @@ export function markerForPatternMember(
   const isRoot = stepIndex === 0 || pcSub(memberPc, pattern.root) === 0;
   const degree = patternDegrees(pattern)[stepIndex] ?? degreeLabelForStep(pc(step));
   const spelling = spellingForMember(pattern, stepIndex, memberPc, options.keyContext);
+
+  // Octave-anchored linear root: if the sounding note is F#3 (=54) and its pc
+  // distance above the root is 6 semitones, the root's linear number in that
+  // octave region is 54 - 6 = 48. Keeps label maths octave-correct.
+  const rootLinear =
+    options.rootLinear ??
+    (options.pitchLinear !== undefined ? options.pitchLinear - pc(step) : pc(pattern.root));
+  const soundingLinear = options.pitchLinear ?? pcAdd(rootLinear, pc(step));
+
+  const label = labelFor({
+    rootLinear,
+    pitchLinear: soundingLinear,
+    mode: options.mode,
+    context: {
+      scaleName: pattern.name,
+      rootSpelling: formatSpelling({
+        step: pattern.root,
+        alteration: pattern.rootSpelling?.alteration ?? 0,
+      }),
+      steps: pattern.steps,
+      declaredDegree: isRoot || options.mode === 'letter' ? undefined : degree,
+      preferFlats: pattern.rootSpelling ? pattern.rootSpelling.alteration < 0 : undefined,
+    },
+  });
+
+  // Letter-mode text: prefer the diatonically-correct spelling engine result
+  // (handles one-letter-per-scale, e.g. D harmonic minor → C#, F## etc.).
+  // Only fall back to the enharmonic pool when the spelling engine has nothing.
+  // The diatonic spelling engine is authoritative for note names: one letter
+  // per scale degree, key-aware accidentals (D harmonic minor → C#, Eb dorian
+  // → C natural, Gb major → Bbb if ever needed…). `chooseEnharmonic` remains
+  // exported from labels.ts for hand-authored override rules.
+  const letterText = formatSpelling(spelling);
+  void chooseEnharmonic;
 
   switch (options.mode) {
     case 'blind':
@@ -158,30 +224,26 @@ export function markerForPatternMember(
         isRoot,
       };
     case 'interval':
+    case 'tonal':
+    case 'number':
+    case 'degree':
       return {
-        text: degree,
-        sub: options.showNoteNamesUnderIntervals ? formatSpelling(spelling) : undefined,
-        fill: palette.degrees[degree] ?? palette.degrees[String(pc(step))] ?? palette.root,
-        stroke: palette.canvas,
+        text: label || degree,
+        sub:
+          options.showNoteNamesUnderIntervals || options.mode === 'tonal'
+            ? letterText
+            : undefined,
+        fill: colorForStep(step, palette, options.mode, degree),
+        stroke: isRoot ? palette.root : palette.canvas,
         isRoot,
         degree,
         spelling,
       };
     case 'letter':
       return {
-        text: formatSpelling(spelling),
+        text: letterText,
         fill: palette.degrees[degree] ?? palette.outside,
         stroke: palette.canvas,
-        isRoot,
-        degree,
-        spelling,
-      };
-    case 'tonal':
-      return {
-        text: degree,
-        sub: formatSpelling(spelling),
-        fill: colorForStep(step, palette, 'tonal', degree),
-        stroke: isRoot ? palette.root : palette.canvas,
         isRoot,
         degree,
         spelling,
