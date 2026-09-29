@@ -26,3 +26,4 @@ export * from './notation.js';
 export * from './instrument.js';
 export * from './presenter.js';
 export * from './relations.js';
+export * from './library/index.js';

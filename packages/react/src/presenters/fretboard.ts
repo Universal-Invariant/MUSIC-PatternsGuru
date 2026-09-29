@@ -15,6 +15,7 @@ import {
   pcAdd,
   pcSub,
   patternPcs,
+  rootLabel,
   type Instrument,
   type MarkerContent,
   type NotationMode,
@@ -112,9 +113,10 @@ function assignMarkers(
   palette: Palette,
   includeAllCandidates: boolean,
   emphasis: readonly number[],
+  window: ResolvedWindow,
 ): Map<string, Assignment> {
   const out = new Map<string, Assignment>();
-  const takenPcs = new Set<number>(); // pc -> already has a primary marker (single-pos mode)
+  const takenPcs = new Set<number>(); // pc -> already has a primary marker (shape mode)
 
   patterns.forEach((pattern, idx) => {
     const mode = modes[idx] ?? modes[0] ?? 'tonal';
@@ -124,11 +126,21 @@ function assignMarkers(
     function place(p: Position, step: number): void {
       let stepIndex = pattern.steps.indexOf(step);
       if (stepIndex < 0) stepIndex = pattern.steps.indexOf(pc(step));
-      const content = markerForPatternMember(pattern, stepIndex < 0 ? 0 : stepIndex, {
+      let content = markerForPatternMember(pattern, stepIndex < 0 ? 0 : stepIndex, {
         mode,
         palette,
         keyContext: patternPcs(pattern),
       });
+      // Root markers always carry the root's *note name* ("E", "Bb") as a
+      // sub-label so the anchor is unambiguous in every notation mode. In
+      // letter mode the main text already is the note name, so we only add
+      // the sub label elsewhere. (MarkerContent is readonly → replace.)
+      if (content.isRoot && mode !== 'letter') {
+        content = {
+          ...content,
+          sub: rootLabel(pattern.root, pattern.rootSpelling?.alteration === -1),
+        };
+      }
       const existing = out.get(p.id);
       if (existing && existing.content.isRoot && !content.isRoot) return;
       out.set(p.id, {
@@ -141,58 +153,76 @@ function assignMarkers(
       });
     }
 
-    if (!includeAllCandidates) {
-      // Single-position ("shape") view: for every pitch class in the pattern,
-      // take the engine's preferred candidate — the playability-ranked position
-      // (fewest frets, mid-neck, lower strings). This yields contiguous box
-      // shapes anchored where a real player would put their hand, including
-      // open strings: E ionian on guitar reads 0-2-4-5-7-9-11 on the low E
-      // string, 0-2 on A, 0-2 on D, 1-4 on G, 0-2 on B, and 0-2-4-5 on the
-      // high E string.
-      for (const step of pattern.steps) {
-        const targetPc = pcAdd(pattern.root, step);
-        if (takenPcs.has(targetPc)) continue;
-        const candidates = instrument.pitchClassToPositions(targetPc);
-        if (candidates.length === 0) continue;
-        const chosen = candidates.find((c) => c.preferred) ?? candidates[0]!;
-        // A position can already be owned by an earlier pattern (e.g. a chord
-        // overlay sharing tones with the scale). Roots win over non-members; if
-        // the slot is held by another pattern's root we keep it and place this
-        // pc at its next-best candidate so no note silently disappears.
-        let pos = chosen.position;
-        if (out.has(pos.id) && out.get(pos.id)!.patternId !== pattern.id) {
-          // Slot is owned by another pattern (e.g. chord overlay sharing tones
-          // with the scale). Prefer this pattern's next-best *free* candidate so
-          // every note of every stacked pattern stays visible.
-          const alt = candidates.find(
-            (c) => c.position.id !== pos.id && (!out.has(c.position.id) || out.get(c.position.id)!.patternId === pattern.id),
-          );
-          if (alt) pos = alt.position;
-        }
-        place(pos, step);
-        takenPcs.add(targetPc);
+    // The entire fretboard is ALWAYS populated with one marker per pitch class.
+    // `includeAllCandidates` ("All positions") lights up *every* position that
+    // can sound a member pitch (multi-octave view, no dimming). Otherwise we
+    // pick exactly one position per pitch class, chosen for best playability
+    // relative to the current window; markers that fall outside the window are
+    // dimmed at render time (see present()).
+    if (includeAllCandidates) {
+      const allPositions = [...instrument.positions()]
+        .filter((p) => p.midi !== undefined && instrument.positionToPitch(p).kind === 'exact')
+        .sort((a, b) => (a.midi ?? 0) - (b.midi ?? 0));
+      for (const p of allPositions) {
+        const binding = instrument.positionToPitch(p);
+        if (binding.kind !== 'exact') continue;
+        const step = pcSub(binding.midi, pattern.root);
+        if (!memberSteps.has(pcAdd(pattern.root, step))) continue;
+        place(p, step);
       }
       return;
     }
 
-    // Full-fretboard view: iterate positions in performance order (low -> high)
-    // and light up every position that can sound a member pitch.
-    const allPositions = [...instrument.positions()]
-      .filter((p) => p.midi !== undefined && instrument.positionToPitch(p).kind === 'exact')
-      .sort((a, b) => (a.midi ?? 0) - (b.midi ?? 0));
+    type Pick = { pos: Position; step: number; midi: number };
+    const picks: Pick[] = [];
+    const windowCentre = (window.colStart + window.colEnd) / 2;
 
-    for (const p of allPositions) {
-      const binding = instrument.positionToPitch(p);
-      if (binding.kind !== 'exact') continue;
-      const step = pcSub(binding.midi, pattern.root);
-      if (!memberSteps.has(pcAdd(pattern.root, step))) continue;
+    // One marker per *pitch class*, placed like a real first-position scale:
+    // the lowest playable occurrence of each member pitch (ascending MIDI,
+    // low → high) claims its pc slot. Because guitar tunings stack fourths,
+    // this naturally spreads the scale diagonally across strings — E ionian
+    // reads 0-2-4-5-7 on the low E string, then A/B/C# on the A string, and so
+    // on, exactly the classic box shape including open strings. Later octaves
+    // of an already-taken pc are skipped; "All positions" (above) shows them.
+    interface Occurrence {
+      readonly step: number;
+      readonly targetPc: number;
+      readonly pos: Position;
+      readonly midi: number;
+    }
+    const occurrences: Occurrence[] = [];
+    for (const step of pattern.steps) {
+      const targetPc = pcAdd(pattern.root, step);
+      for (const cand of instrument.pitchClassToPositions(targetPc)) {
+        occurrences.push({
+          step,
+          targetPc,
+          pos: cand.position,
+          midi: cand.position.midi ?? 0,
+        });
+      }
+    }
+    occurrences.sort(
+      (a, b) =>
+        a.midi - b.midi ||
+        Math.abs(a.pos.col - windowCentre) - Math.abs(b.pos.col - windowCentre) ||
+        a.pos.row - b.pos.row,
+    );
 
-      place(p, step);
+    for (const occ of occurrences) {
+      if (takenPcs.has(occ.targetPc)) continue;
+      takenPcs.add(occ.targetPc);
+      picks.push({ pos: occ.pos, step: occ.step, midi: occ.midi });
+    }
+
+    // Place in ascending-MIDI order so earlier patterns' roots claim shared
+    // slots first and the shape reads low-to-high across strings.
+    picks.sort((a, b) => a.midi - b.midi || a.pos.row - b.pos.row);
+    for (const p of picks) {
+      place(p.pos, p.step);
     }
   });
   return out;
-
-  // `place` is defined inside the per-pattern callback below via closure.
 }
 
 /** Resolve relation groups into connector point sets using layout geometry. */
@@ -243,7 +273,7 @@ export class FretboardPresenter implements Presenter {
     const palette = scene.palette ?? TONAL_PALETTE;
     const modes = scene.modes ?? ['tonal'];
     const layers = scene.layers ?? defaultLayers();
-    const effects = scene.effects ?? defaultEffects();
+    const effects = layerVisible(layers, 'effects') ? (scene.effects ?? defaultEffects()) : undefined;
 
     const cols = window.colEnd - window.colStart + 1;
     const rows = window.rowEnd - window.rowStart + 1;
@@ -257,6 +287,7 @@ export class FretboardPresenter implements Presenter {
       palette,
       scene.includeAllCandidates ?? false,
       scene.emphasis ?? [1],
+      window,
     );
 
     const markers: RenderMarker[] = [];
@@ -289,14 +320,20 @@ export class FretboardPresenter implements Presenter {
 
     for (const a of assignments.values()) {
       const extra = groupIdsByPosition.get(a.position.id) ?? [];
-      const effect = a.content.isRoot ? effects.root : effects.member;
+      const effect = effects ? (a.content.isRoot ? effects.root : effects.member) : undefined;
+      // Window dimming: the whole fretboard is always shown, but pattern
+      // markers outside the movable window become semi-transparent so the
+      // in-window shape pops. "All positions" disables this entirely.
+      const outsideWindow =
+        !scene.includeAllCandidates &&
+        (a.position.col < window.colStart || a.position.col > window.colEnd);
       markers.push({
         position: a.position,
         content: a.content,
         patternId: a.patternId,
         groups: [...a.groups, ...extra],
         effect,
-        alpha: a.alpha,
+        alpha: outsideWindow ? Math.min(a.alpha, 0.28) : a.alpha,
         scale: a.scale,
       });
     }

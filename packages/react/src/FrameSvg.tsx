@@ -299,17 +299,40 @@ export function FrameSvg({ frame, onMarkerClick, className }: FrameSvgProps) {
     return out;
   }, [h]);
 
+  // Fretboard geometry, nut-aware. On a real instrument the "open" column is
+  // not a fret cell — it sits BEHIND the nut. So we render one extra half-cell
+  // of blank space to the left, draw the nut as a thick bar at its edge, and
+  // label open markers as "0" while real frets keep their numbers:
+  //   layout:  |0|1|2|3|...   →   visual:  0 |1|2|3|...
+  const nutLayout = useMemo(() => {
+    const nutX = h.padX + (0 - h.colStart) * h.cellW; // left edge of the open column
+    return { nutX };
+  }, [h]);
+
   const fretLines = useMemo(() => {
     const out: { x: number; key: string; nut: boolean }[] = [];
-    for (let col = h.colStart; col <= h.colEnd + 1; col++) {
-      out.push({
-        x: h.padX + (col - h.colStart) * h.cellW,
-        key: `fret-${col}`,
-        nut: col === 0,
-      });
+    if (h.colStart === 0) {
+      // The nut itself (thick bar between the open strip and fret 1).
+      out.push({ x: nutLayout.nutX + h.cellW, key: 'nut', nut: true });
+      // Vertical wire separators for real frets only (open has no left wire).
+      for (let col = 2; col <= h.colEnd + 1; col++) {
+        out.push({
+          x: h.padX + (col - h.colStart) * h.cellW,
+          key: `fret-${col}`,
+          nut: false,
+        });
+      }
+    } else {
+      for (let col = h.colStart; col <= h.colEnd + 1; col++) {
+        out.push({
+          x: h.padX + (col - h.colStart) * h.cellW,
+          key: `fret-${col}`,
+          nut: false,
+        });
+      }
     }
     return out;
-  }, [h]);
+  }, [h, nutLayout]);
 
   // Markers split into background dots vs pattern markers.
   const background = frame.markers.filter((m) => !m.patternId);
@@ -341,6 +364,18 @@ export function FrameSvg({ frame, onMarkerClick, className }: FrameSvgProps) {
 
       {bodyVisible && (
         <g>
+          {/* Strings start at the nut when present (open strip has no wires). */}
+          {stringLines.map((s) => (
+            <line
+              key={s.key}
+              x1={h.colStart === 0 ? nutLayout.nutX + h.cellW : h.padX}
+              y1={s.y}
+              x2={h.padX + cols * h.cellW}
+              y2={s.y}
+              stroke="#8d97a5"
+              strokeWidth={1.2}
+            />
+          ))}
           {fretLines.map((f) => (
             <line
               key={f.key}
@@ -349,13 +384,12 @@ export function FrameSvg({ frame, onMarkerClick, className }: FrameSvgProps) {
               x2={f.x}
               y2={h.padY + rows * h.cellH}
               stroke={f.nut ? '#e8e8e8' : '#5a626c'}
-              strokeWidth={f.nut ? 4 : 1.5}
+              strokeWidth={f.nut ? 5 : 1.5}
             />
           ))}
-          {stringLines.map((s) => (
-            <line key={s.key} x1={h.padX} y1={s.y} x2={h.padX + cols * h.cellW} y2={s.y} stroke="#8d97a5" strokeWidth={1.2} />
-          ))}
-          {INLAY_FRETS.filter((f) => f >= h.colStart && f <= h.colEnd).map((f) => {
+          {INLAY_FRETS.filter(
+            (f) => f >= Math.max(1, h.colStart) && f <= h.colEnd,
+          ).map((f) => {
             const x = h.padX + (f - h.colStart) * h.cellW + h.cellW / 2;
             const midY = h.padY + (rows * h.cellH) / 2;
             const dot = (yy: number, key: string) => (
@@ -365,20 +399,23 @@ export function FrameSvg({ frame, onMarkerClick, className }: FrameSvgProps) {
               ? [dot(midY - h.cellH, `inlay-${f}-a`), dot(midY + h.cellH, `inlay-${f}-b`)]
               : dot(midY, `inlay-${f}`);
           })}
-          {/* Fret numbers along the bottom */}
-          {Array.from({ length: cols }, (_, i) => i + h.colStart).map((f) => (
-            <text
-              key={`fn-${f}`}
-              x={h.padX + (f - h.colStart) * h.cellW + h.cellW / 2}
-              y={frame.height - h.labelH / 2}
-              textAnchor="middle"
-              fontSize={11}
-              fill={INLAY_FRETS.includes(f) ? '#cfd6df' : '#6b7480'}
-              fontWeight={INLAY_FRETS.includes(f) ? 700 : 400}
-            >
-              {f}
-            </text>
-          ))}
+          {/* Fret numbers along the bottom — real frets only (the open column
+              is not a fret; markers there are labelled "0" by the engine). */}
+          {Array.from({ length: Math.max(0, h.colEnd - Math.max(1, h.colStart) + 1) }, (_, i) => i + Math.max(1, h.colStart)).map(
+            (f) => (
+              <text
+                key={`fn-${f}`}
+                x={h.padX + (f - h.colStart) * h.cellW + h.cellW / 2}
+                y={frame.height - h.labelH / 2}
+                textAnchor="middle"
+                fontSize={11}
+                fill={INLAY_FRETS.includes(f) ? '#cfd6df' : '#6b7480'}
+                fontWeight={INLAY_FRETS.includes(f) ? 700 : 400}
+              >
+                {f}
+              </text>
+            ),
+          )}
         </g>
       )}
 

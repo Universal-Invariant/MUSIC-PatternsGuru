@@ -140,20 +140,68 @@ export function createFrettedInstrument(config: FrettedConfig): Instrument {
     }
   }
 
-  // Mark exactly one preferred candidate per pitch class: the *lowest playable
-  // position* wins — smallest MIDI number, ties broken toward lower-pitched
-  // strings (larger row). This is what makes single-shape views read as real
-  // box patterns anchored at the nut with open strings included (E ionian runs
-  // 0-2-4-5-7-9-11 on the low E string), instead of scattering notes across
-  // mid-neck "optimal" positions. `cost` remains available for UI ranking.
-  for (const list of byPc.values()) {
-    list.sort(
+  // Mark exactly one preferred candidate per pitch class using a playability
+  // score that mirrors how players actually learn fretboard shapes:
+  //   score = maxFret + span + 2 * totalFrets
+  // - `maxFret` keeps shapes near the nut (window-anchored),
+  // - `span` (highMidi - lowMidi across chosen positions) penalises patterns
+  //   that scatter across the neck,
+  // - `totalFrets` favours open-string-heavy, compact boxes over stretched ones.
+  // This produces contiguous, low-anchored scale/chord shapes that include open
+  // strings (e.g. E Ionian reads 0-2-3-4-5-7 on the two lowest strings) rather
+  // than stacking every note on the lowest string or scattering to mid-neck.
+  const preferredByPc = new Map<PitchClass, PositionCandidate>();
+
+  function scoreOf(chosen: readonly PositionCandidate[]): number {
+    let minMidi = Infinity;
+    let maxMidi = -Infinity;
+    let maxFret = 0;
+    let totalFrets = 0;
+    for (const c of chosen) {
+      const midi = c.position.midi ?? 0;
+      if (midi < minMidi) minMidi = midi;
+      if (midi > maxMidi) maxMidi = midi;
+      if (c.position.col > maxFret) maxFret = c.position.col;
+      totalFrets += c.position.col;
+    }
+    return maxFret + (maxMidi - minMidi) + 2 * totalFrets;
+  }
+
+  // Greedy selection in ascending MIDI order within each pitch-class candidate
+  // list, so lower-octave anchors are considered first.
+  const pcLists = [...byPc.entries()].sort((a, b) => a[0] - b[0]);
+  for (const [targetPc, candidates] of pcLists) {
+    const sorted = [...candidates].sort(
       (a, b) =>
         (a.position.midi ?? 0) - (b.position.midi ?? 0) ||
+        a.position.col - b.position.col ||
         b.position.row - a.position.row,
     );
-    const first = list[0];
-    if (first) list[0] = { ...first, preferred: true };
+    let best: PositionCandidate | undefined;
+    let bestScore = Infinity;
+    for (const cand of sorted) {
+      const chosen: PositionCandidate[] = [];
+      // Add already-preferred lower pitch classes.
+      for (const [, p] of preferredByPc) chosen.push(p);
+      chosen.push(cand);
+      const s = scoreOf(chosen);
+      if (s < bestScore) {
+        bestScore = s;
+        best = cand;
+      }
+    }
+    if (best) preferredByPc.set(targetPc, { ...best, preferred: true });
+  }
+
+  // Apply the preferred flag back into the candidate lists.
+  for (const list of byPc.values()) {
+    for (let i = 0; i < list.length; i++) {
+      const cand = list[i]!;
+      const pref = preferredByPc.get(pc(cand.position.midi ?? 0));
+      if (pref && pref.position.id === cand.position.id) {
+        list[i] = { ...cand, preferred: true };
+      }
+    }
   }
 
   const lowMidi = Math.min(...positions.map((p) => p.midi ?? 0));
