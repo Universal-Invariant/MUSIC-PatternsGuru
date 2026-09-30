@@ -323,6 +323,7 @@ export class FretboardPresenter implements Presenter {
           groups: [],
           alpha: 0.35,
           scale: 0.45,
+          shape: scene.shapes?.ghost,
         });
       }
     }
@@ -354,6 +355,7 @@ export class FretboardPresenter implements Presenter {
         effect,
         alpha: outsideWindow ? Math.min(a.alpha, 0.28) : a.alpha,
         scale: a.scale * markerScale,
+        shape: scene.shapes ? (a.content.isRoot ? scene.shapes.root : scene.shapes.member) : undefined,
       });
     }
 

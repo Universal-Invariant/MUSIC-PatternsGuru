@@ -75,7 +75,22 @@ export interface RenderMarker {
   readonly alpha?: number;
   /** Scale multiplier for emphasis. */
   readonly scale?: number;
+  /** Marker geometry (from the shape palette). Undefined = disc. */
+  readonly shape?: MarkerShape;
 }
+
+/** Configurable note shapes (shape palette). */
+export type MarkerShape = 'disc' | 'hexagon' | 'star' | 'octagon' | 'cloud' | 'diamond' | 'square';
+
+export const MARKER_SHAPES: readonly MarkerShape[] = [
+  'disc',
+  'hexagon',
+  'star',
+  'octagon',
+  'cloud',
+  'diamond',
+  'square',
+] as const;
 
 /** A resolved connector ready for drawing. */
 export interface RenderConnector {
@@ -134,7 +149,25 @@ export interface VisualizationScene {
   readonly includeAllCandidates?: boolean;
   /** Global size multiplier for pattern markers (dots AND their text). 1 = default. */
   readonly markerScale?: number;
+  /** Marker geometry palette: one shape per role. Undefined = all discs. */
+  readonly shapes?: ShapePalette;
 }
+
+/** Which shape each marker role gets. Mirrors the colour palettes. */
+export interface ShapePalette {
+  readonly root: MarkerShape;
+  readonly member: MarkerShape;
+  readonly ghost: MarkerShape;
+}
+
+export const SHAPE_PALETTES: ReadonlyArray<{ id: string; name: string; palette: ShapePalette }> = [
+  { id: 'discs', name: 'Discs (classic)', palette: { root: 'disc', member: 'disc', ghost: 'disc' } },
+  { id: 'hex', name: 'Hexagons', palette: { root: 'hexagon', member: 'hexagon', ghost: 'hexagon' } },
+  { id: 'stars', name: 'Stars', palette: { root: 'star', member: 'disc', ghost: 'disc' } },
+  { id: 'octa', name: 'Octagons', palette: { root: 'octagon', member: 'octagon', ghost: 'octagon' } },
+  { id: 'clouds', name: 'Clouds', palette: { root: 'cloud', member: 'cloud', ghost: 'cloud' } },
+  { id: 'diamonds', name: 'Diamonds', palette: { root: 'diamond', member: 'square', ghost: 'square' } },
+];
 
 export interface ViewWindow {
   readonly rowStart?: number;

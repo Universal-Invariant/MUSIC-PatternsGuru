@@ -12,6 +12,7 @@
 import { useMemo, useState } from 'react';
 import {
   PALETTES,
+  SHAPE_PALETTES,
   NOTATION_MODES,
   pcAdd,
   type NotationMode,
@@ -44,10 +45,14 @@ export function App() {
    * optional degree offset for the root relative to the scale root (e.g. +1 =>
    * C#dim over D phrygian dominant). Add/remove freely; order = draw order. */
   const [overlayList, setOverlayList] = useState<{ chord: string; offset: number }[]>([]);
+  /** Pending "add chord" controls (select a type + root offset, then click Add). */
+  const [pendingChord, setPendingChord] = useState('');
+  const [pendingOffset, setPendingOffset] = useState(0);
   const [secondScaleId, setSecondScaleId] = useState<string | null>(DEFAULT_SECOND_SCALE);
   const [mode, setMode] = useState<NotationMode>('tonal');
   const [markerScale, setMarkerScale] = useState(1);
   const [paletteId, setPaletteId] = useState('tonal-default');
+  const [shapeId, setShapeId] = useState('discs');
   const [fretWindow, setFretWindow] = useState<'0-12' | '0-15' | '0-24'>('0-12');
   const [showChordsInScale, setShowChordsInScale] = useState(false);
   const [chordSize, setChordSize] = useState<3 | 4>(4);
@@ -97,6 +102,7 @@ export function App() {
   }, [overlayList, rootIdx]);
 
   const windowCols = fretWindow === '0-12' ? 12 : fretWindow === '0-15' ? 15 : 24;
+  const shapes = SHAPE_PALETTES.find((s) => s.id === shapeId)?.palette;
 
   const scene = useMemo(() => {
     const patterns = searched ? [...selection.patterns, searched] : selection.patterns;
@@ -105,6 +111,7 @@ export function App() {
       mode,
       markerScale,
       palette,
+      shapes,
       window: { colStart: 0, colEnd: windowCols },
       toggles: { connectors, labels: true, background, effects: effectsOn },
       showChordsInScale,
@@ -119,6 +126,8 @@ export function App() {
     searched,
     mode,
     palette,
+    shapes,
+    markerScale,
     windowCols,
     connectors,
     background,
@@ -250,41 +259,82 @@ export function App() {
             )}
             <div className="field" style={{ marginTop: 10 }}>
               <span style={{ display: 'block', marginBottom: 4 }}>Chord overlays (stack)</span>
-              {overlays.map((o, i) => (
-                <div key={`${o.id}-${i}`} className="overlay-row">
-                  <span className="overlay-name">{o.name}</span>
-                  <button
-                    className="overlay-remove"
-                    onClick={() => setOverlayList((list) => list.filter((_, j) => j !== i))}
-                    aria-label={`remove ${o.name}`}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
+              {/* Request #4: per-item list with individual remove + inline reconfigure. */}
+              {overlayList.length === 0 && (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>none yet</div>
+              )}
+              {overlayList.map((o, i) => {
+                const t = CHORD_TEMPLATES.find((x) => x.id === o.chord);
+                return (
+                  <div key={i} className="overlay-row">
+                    <select
+                      aria-label={`overlay ${i + 1} chord`}
+                      value={o.chord}
+                      onChange={(e) =>
+                        setOverlayList((list) =>
+                          list.map((x, j) => (j === i ? { ...x, chord: e.target.value } : x)),
+                        )
+                      }
+                    >
+                      {CHORD_TEMPLATES.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label={`overlay ${i + 1} root offset`}
+                      value={o.offset}
+                      onChange={(e) =>
+                        setOverlayList((list) =>
+                          list.map((x, j) => (j === i ? { ...x, offset: Number(e.target.value) } : x)),
+                        )
+                      }
+                    >
+                      {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => (
+                        <option key={n} value={n}>{n === 0 ? 'same root' : `+${n} st`}</option>
+                      ))}
+                    </select>
+                    <span className="overlay-name">{t ? `${ROOT_NAMES[(rootIdx + o.offset) % 12]} ${t.name}` : ''}</span>
+                    <button
+                      className="overlay-remove"
+                      onClick={() => setOverlayList((list) => list.filter((_, j) => j !== i))}
+                      aria-label={`remove overlay ${i + 1}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
               <div className="overlay-add">
                 <select
                   id="overlay-chord-select"
-                  defaultValue=""
-                  onChange={(e) => {
-                    const el = e.currentTarget;
-                    const sel = document.getElementById('overlay-offset-select') as HTMLSelectElement | null;
-                    if (el.value) {
-                      setOverlayList((list) => [...list, { chord: el.value, offset: Number(sel?.value ?? 0) }]);
-                      el.value = '';
-                    }
-                  }}
+                  value={pendingChord}
+                  onChange={(e) => setPendingChord(e.target.value)}
                 >
                   <option value="">add chord…</option>
                   {CHORD_TEMPLATES.map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
-                <select id="overlay-offset-select" defaultValue="0">
+                <select
+                  id="overlay-offset-select"
+                  value={pendingOffset}
+                  onChange={(e) => setPendingOffset(Number(e.target.value))}
+                >
                   {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => (
                     <option key={n} value={n}>{n === 0 ? 'same root' : `+${n} st`}</option>
                   ))}
                 </select>
+                <button
+                  className="overlay-clear"
+                  disabled={!pendingChord}
+                  onClick={() => {
+                    if (!pendingChord) return;
+                    setOverlayList((list) => [...list, { chord: pendingChord, offset: pendingOffset }]);
+                    setPendingChord('');
+                  }}
+                >
+                  add
+                </button>
               </div>
               {overlayList.length > 0 && (
                 <button className="overlay-clear" onClick={() => setOverlayList([])}>clear all</button>
@@ -294,18 +344,17 @@ export function App() {
 
           <section className="panel">
             <h2>Notation</h2>
-            <div className="seg" role="radiogroup" aria-label="notation mode">
-              {NOTATION_MODES.map((m) => (
-                <button
-                  key={m}
-                  className={m === mode ? 'on' : ''}
-                  onClick={() => setMode(m)}
-                  title={`${m} notation`}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
+            {/* Request #1: too many modes for buttons — use a dropdown. */}
+            <label className="field">
+              Notation mode
+              <select value={mode} onChange={(e) => setMode(e.target.value as NotationMode)}>
+                {NOTATION_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m.charAt(0).toUpperCase() + m.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="row" style={{ marginTop: 10 }}>
               <label className="field grow">
                 Marker size <span className="mono">{markerScale.toFixed(2)}×</span>
@@ -314,8 +363,9 @@ export function App() {
                   type="range"
                   min={0.5}
                   max={1.6}
-                  step={0.05}
+                  step={0.01}
                   value={markerScale}
+                  onInput={(e) => setMarkerScale(Number(e.currentTarget.value))}
                   onChange={(e) => setMarkerScale(Number(e.target.value))}
                 />
               </label>
@@ -327,6 +377,16 @@ export function App() {
                   {PALETTES.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                Note shape
+                <select value={shapeId} onChange={(e) => setShapeId(e.target.value)}>
+                  {SHAPE_PALETTES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
                     </option>
                   ))}
                 </select>

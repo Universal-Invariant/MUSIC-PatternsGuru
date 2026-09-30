@@ -294,13 +294,19 @@ footer.statusbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   padding: 4px 8px;
   margin-bottom: 4px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.05);
   font-size: 13px;
 }
+.overlay-row select {
+  max-width: 130px;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.muted { color: var(--muted); }
 .overlay-name { opacity: 0.9; }
 .overlay-remove {
   border: none;

@@ -16,7 +16,7 @@
  */
 
 import { useMemo } from 'react';
-import type { RenderConnector, RenderFrame, RenderMarker } from '@mpg/core';
+import type { MarkerShape, RenderConnector, RenderFrame, RenderMarker } from '@mpg/core';
 
 export interface FrameSvgProps {
   readonly frame: RenderFrame;
@@ -232,12 +232,64 @@ function ConnectorShape({ c, h }: { c: RenderConnector; h: Hints }) {
   }
 }
 
+/**
+ * SVG path for the configurable marker shapes (shape palette). Returns null for
+ * 'disc' so the caller keeps using a plain <circle> (cheaper + round stroke).
+ */
+export function shapePathFor(shape: MarkerShape, x: number, y: number, r: number): string | null {
+  const poly = (n: number, rotDeg: number, radii?: number[]): string => {
+    const pts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const rad = radii ? radii[i % radii.length]! : r;
+      const a = ((rotDeg + (360 / n) * i) * Math.PI) / 180;
+      pts.push(`${(x + rad * Math.cos(a)).toFixed(2)} ${(y + rad * Math.sin(a)).toFixed(2)}`);
+    }
+    return `M ${pts.join(' L ')} Z`;
+  };
+  switch (shape) {
+    case 'disc':
+      return null;
+    case 'hexagon':
+      return poly(6, -90);
+    case 'octagon':
+      return poly(8, -90 + 22.5);
+    case 'square':
+      return poly(4, -45);
+    case 'diamond':
+      return `M ${x} ${y - r} L ${x + r * 0.78} ${y} L ${x} ${y + r} L ${x - r * 0.78} ${y} Z`;
+    case 'star': {
+      // 5-point star: alternating outer/inner radii.
+      const pts: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        const rad = i % 2 === 0 ? r : r * 0.45;
+        const a = ((-90 + 36 * i) * Math.PI) / 180;
+        pts.push(`${(x + rad * Math.cos(a)).toFixed(2)} ${(y + rad * Math.sin(a)).toFixed(2)}`);
+      }
+      return `M ${pts.join(' L ')} Z`;
+    }
+    case 'cloud': {
+      // Four overlapping arcs forming a puffy cloud silhouette.
+      const rr = r * 0.62;
+      return (
+        `M ${x - r} ${y + rr * 0.4} ` +
+        `A ${rr} ${rr} 0 1 1 ${x - rr * 0.5} ${y - rr * 0.9} ` +
+        `A ${rr} ${rr} 0 1 1 ${x + rr * 0.6} ${y - rr * 0.8} ` +
+        `A ${rr} ${rr} 0 1 1 ${x + r} ${y + rr * 0.4} ` +
+        `A ${rr * 1.2} ${rr * 0.7} 0 0 1 ${x - r} ${y + rr * 0.4} Z`
+      );
+    }
+    default:
+      return null;
+  }
+}
+
 function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: string) => void }) {
   const { x, y } = centerOf(m, h);
   const r = (Math.min(h.cellW, h.cellH) * 0.38) * (m.scale ?? 1);
   const c = m.content;
   const alpha = m.alpha ?? 1;
   const glowing = m.effect && m.effect.kind === 'glow';
+  const shapePath = shapePathFor(m.shape ?? 'disc', x, y, r);
   return (
     <g
       opacity={alpha}
@@ -249,19 +301,37 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
           <animate attributeName="opacity" values="0.2;0.5;0.2" dur={`${1 / (m.effect?.rate ?? 0.6)}s`} repeatCount="indefinite" />
         </circle>
       )}
-      <circle cx={x} cy={y} r={r} fill={c.fill} stroke={c.stroke} strokeWidth={c.isRoot ? 2.5 : 1} />
+      {shapePath ? (
+        <path d={shapePath} fill={c.fill} stroke={c.stroke} strokeWidth={c.isRoot ? 2.5 : 1} />
+      ) : (
+        <circle cx={x} cy={y} r={r} fill={c.fill} stroke={c.stroke} strokeWidth={c.isRoot ? 2.5 : 1} />
+      )}
       {c.text && (
-        <text
-          x={x}
-          y={c.sub ? y - 1 : y + 4}
-          textAnchor="middle"
-          fontSize={r * 1.05}
-          fontWeight={c.isRoot ? 800 : 600}
-          fill={c.isRoot ? '#1a1400' : '#0c0f12'}
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
-        >
-          {c.text}
-        </text>
+        <>
+          {/* Opaque plate behind the letter/number so labels never bleed into
+              the fretboard wood or connector blobs (request #3). */}
+          <rect
+            x={x - r * 0.72}
+            y={y - r * 0.78}
+            width={r * 1.44}
+            height={r * (c.sub ? 1.62 : 1.24)}
+            rx={r * 0.28}
+            fill="#f5f7fa"
+            opacity={0.92}
+            style={{ pointerEvents: 'none' }}
+          />
+          <text
+            x={x}
+            y={c.sub ? y - 1 : y + 4}
+            textAnchor="middle"
+            fontSize={r * 1.05}
+            fontWeight={c.isRoot ? 800 : 600}
+            fill={c.isRoot ? '#1a1400' : '#0c0f12'}
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {c.text}
+          </text>
+        </>
       )}
       {c.sub && (
         <text

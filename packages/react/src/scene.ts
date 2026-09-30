@@ -24,6 +24,7 @@ import {
   type Pattern,
   type RelationGroup,
   type RenderLayer,
+  type ShapePalette,
   type VisualizationScene,
   type ViewWindow,
 } from '@mpg/core';
@@ -70,6 +71,8 @@ export interface BuildSceneOptions {
   includeAllCandidates?: boolean;
   /** Global dot/text size multiplier (UI slider). */
   markerScale?: number;
+  /** Marker shape palette (UI dropdown). Undefined = discs. */
+  shapes?: ShapePalette;
   /** Per-pattern opacity/emphasis for the base patterns (overlay alpha is fixed). */
   emphasis?: readonly number[];
   rootEffect?: Effect;
@@ -170,6 +173,7 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     showBackground: toggles.background,
     includeAllCandidates: options.includeAllCandidates ?? false,
     markerScale: options.markerScale ?? 1,
+    shapes: options.shapes,
   };
 }
 
