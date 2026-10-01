@@ -10,8 +10,14 @@ build/
 .vscode/
 .idea/
 
-# System/Environment files
+# OS files
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Env
 .env
 .env.local
-.env.*.local
