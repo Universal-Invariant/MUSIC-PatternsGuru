@@ -15,9 +15,11 @@ import {
   FUNCTION_SHAPE_PALETTES,
   NOTATION_MODES,
   pcAdd,
+  type FunctionShapePalette,
   type NotationMode,
   type Pattern,
 } from '@mpg/core';
+import { ShapePaletteEditor, loadCustomShapePalettes, removeCustomShapePalette } from './ShapePaletteEditor.js';
 import { PracticeTab } from './PracticeTab.js';
 import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt, parsePatternQuery } from '@mpg/core/library';
 import { INSTRUMENTS, listInstruments } from '@mpg/instruments';
@@ -56,6 +58,12 @@ export function App() {
   const [tab, setTab] = useState<'playground' | 'practice'>('playground');
   /** Function-based shape palette id (circles for chord tones, squares for the rest…). */
   const [functionShapeId, setFunctionShapeId] = useState('uniform-disc');
+  /** #11: user-defined shape palettes + editor modal state. Selecting a custom
+   * palette stores its id here with a `custom:` prefix; the resolved object is
+   * passed to buildScene via `functionShapes`. */
+  const [customShapePalettes, setCustomShapePalettes] = useState<FunctionShapePalette[]>(() => loadCustomShapePalettes());
+  const [shapeEditorOpen, setShapeEditorOpen] = useState(false);
+  const [shapeEditorTarget, setShapeEditorTarget] = useState<FunctionShapePalette | null>(null);
   const [fretWindow, setFretWindow] = useState<'0-12' | '0-15' | '0-24'>('0-12');
   /** Board view mode: global one-per-pitch-class vs box-pattern clipping. */
   const [viewMode, setViewMode] = useState<'global' | 'box'>('global');
@@ -120,6 +128,12 @@ export function App() {
     return { colStart, colEnd };
   }, [viewMode, boxStart, boxWidth, instrument]);
 
+  /** Selected custom palette object (undefined when a built-in id is chosen). */
+  const customShapes = useMemo(
+    () => (functionShapeId.startsWith('custom:') ? customShapePalettes.find((p) => p.id === functionShapeId.slice(7)) : undefined),
+    [functionShapeId, customShapePalettes],
+  );
+
   const scene = useMemo(() => {
     const patterns = searched ? [...selection.patterns, searched] : selection.patterns;
     return buildScene(instrument, {
@@ -127,7 +141,8 @@ export function App() {
       mode,
       markerScale,
       palette,
-      functionShapeId,
+      functionShapes: customShapes,
+      functionShapeId: customShapes ? undefined : functionShapeId,
       window: { colStart: 0, colEnd: windowCols },
       fretWindow: box,
       toggles: { connectors, labels: true, background, effects: effectsOn },
@@ -144,6 +159,7 @@ export function App() {
     mode,
     palette,
     functionShapeId,
+    customShapes,
     markerScale,
     windowCols,
     box,
@@ -442,7 +458,38 @@ export function App() {
                       {s.name}
                     </option>
                   ))}
+                  {customShapePalettes.length > 0 && (
+                    <optgroup label="Custom">
+                      {customShapePalettes.map((s) => (
+                        <option key={s.id} value={`custom:${s.id}`}>{s.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
+                <div className="row" style={{ marginTop: 4 }}>
+                  <button
+                    className="btn small"
+                    onClick={() => {
+                      setShapeEditorTarget(customShapes ?? null);
+                      setShapeEditorOpen(true);
+                    }}
+                    title={customShapes ? `Edit “${customShapes.name}”` : 'Create a custom degree→shape palette'}
+                  >
+                    {customShapes ? 'Edit selected' : 'New palette…'}
+                  </button>
+                  {customShapes && (
+                    <button
+                      className="btn small danger"
+                      onClick={() => {
+                        removeCustomShapePalette(customShapes.id);
+                        setCustomShapePalettes(loadCustomShapePalettes());
+                        setFunctionShapeId('uniform-disc');
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
               </label>
             </div>
           </section>
@@ -618,6 +665,23 @@ export function App() {
         <span>layers: {frame.layers.filter((l) => l.visible).length}/{frame.layers.length}</span>
         <span>@mpg/core · @mpg/instruments · @mpg/react — prototype</span>
       </footer>
+
+      {/* #11: custom function-shape palette editor modal */}
+      <ShapePaletteEditor
+        open={shapeEditorOpen}
+        initial={shapeEditorTarget}
+        onClose={() => setShapeEditorOpen(false)}
+        onSave={(p) => {
+          setCustomShapePalettes(loadCustomShapePalettes());
+          setFunctionShapeId(`custom:${p.id}`);
+          setShapeEditorTarget(p);
+        }}
+        onDelete={(id) => {
+          removeCustomShapePalette(id);
+          setCustomShapePalettes(loadCustomShapePalettes());
+          if (functionShapeId === `custom:${id}`) setFunctionShapeId('uniform-disc');
+        }}
+      />
     </div>
   );
 }

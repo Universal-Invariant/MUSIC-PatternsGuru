@@ -695,3 +695,56 @@ table.prog-grid {
   position: relative;
   min-width: 100%;
 }
+
+/* ── Shape palette editor modal (#11) ─────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--panel, #1c1f26);
+  border: 1px solid var(--border, #333a45);
+  border-radius: 10px;
+  padding: 16px 18px;
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal h3 { margin: 0 0 10px; }
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.shape-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.shape-cell .degree-key {
+  min-width: 26px;
+  font-weight: 600;
+  text-align: right;
+}
+.shape-cell select { flex: 1; }
+.shape-preview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  margin: 10px 0;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  font-size: 18px;
+}
+.shape-glyph { line-height: 1; }
+.row.end { justify-content: flex-end; gap: 8px; }
+.btn.primary { background: var(--accent, #4f8cff); color: #fff; border-color: transparent; }
+.btn.danger { background: transparent; color: #ff6b6b; border-color: #ff6b6b55; }
