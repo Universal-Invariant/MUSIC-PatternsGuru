@@ -364,27 +364,37 @@ footer.statusbar {
   padding: 14px 16px;
   width: 100%;
 }
-/* Arrange-style layout: top row = controls (narrow) + viewer stack (wide);
-   timeline and progression editor span the FULL width in their own rows below. */
+/* Practice layout: two columns — left = transport + progression editor (fixed-ish
+   width, scrolls with page); right = now/up-next viewers on top with the
+   arrange-style timeline pinned at the BOTTOM of the right pane. The right
+   column stretches to fill all remaining horizontal space and grows with the
+   browser window. */
 .practice.practice-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
   gap: 18px;
   padding: 18px 22px;
   align-items: start;
 }
+.app-main {
+  flex: 1;
+  min-width: 0;
+}
 .practice-timeline-row,
 .practice-editor-row {
-  grid-column: 1 / -1;
   min-width: 0;
 }
 .practice-controls {
-  position: static;
+  position: sticky;
+  top: 14px;
   min-width: 0;
 }
 @media (max-width: 900px) {
   .practice.practice-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .practice-controls {
+    position: static;
   }
 }
 .practice-right {
@@ -392,6 +402,39 @@ footer.statusbar {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+}
+/* Progression editor in the narrow left column: compact stacked form controls. */
+.practice-editor .prog-grid-wrap {
+  overflow-x: auto;
+}
+.practice-editor .prog-grid {
+  font-size: 12px;
+}
+.practice-editor .prog-grid th,
+.practice-editor .prog-grid td {
+  padding: 3px 4px;
+  vertical-align: top;
+}
+.practice-editor .prog-grid input[type='number'] {
+  width: 62px;
+}
+.practice-editor .prog-grid select {
+  display: block;
+  width: 100%;
+  min-width: 88px;
+  margin-top: 2px;
+  font-size: 12px;
+}
+.practice-editor .prog-io {
+  width: 100%;
+  font-size: 12px;
+}
+.practice-transport {
+  font-size: 13px;
+}
+.practice-transport input[type='file'] {
+  max-width: 100%;
+  font-size: 12px;
 }
 
 /* Viewer stack: current fretboard on top, upcoming change underneath for anticipation. */

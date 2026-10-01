@@ -184,7 +184,7 @@ export function App() {
       </nav>
 
       {tab === 'practice' ? (
-        <div className="layout practice-layout">
+        <div className="app-main">
           <PracticeTab
             instrument={instrument}
             mode={mode}

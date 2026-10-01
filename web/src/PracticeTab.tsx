@@ -602,10 +602,9 @@ export function PracticeTab(props: PracticeSharedProps) {
     </section>
   );
 
-  const trackPanel = (
-    <section className="panel">
-      <h2>Track</h2>
-      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+  const transportBar = (
+    <section className="panel practice-transport">
+      <div className="row" style={{ alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <input type="file" accept="audio/*" onChange={(e) => onFile(e.target.files?.[0])} />
         <button onClick={togglePlay} disabled={!audioName}>
           {playing ? '⏸ pause' : '▶ play'}
@@ -631,7 +630,7 @@ export function PracticeTab(props: PracticeSharedProps) {
   );
 
   const editorSection = (
-    <section className="panel">
+    <section className="panel practice-editor">
       <h2>Progression editor ({segments.length} changes)</h2>
         <div className="row prog-toolbar" style={{ flexWrap: 'wrap', gap: 6 }}>
           <button onClick={() => addMarkerAt(currentTime)}>+ marker @ play head</button>
@@ -642,14 +641,14 @@ export function PracticeTab(props: PracticeSharedProps) {
             paste ×{pasteCount} after selection
           </button>
           <label className="mini-field">
-            paste reps
+            reps
             <input type="number" min={1} max={64} value={pasteCount} onChange={(e) => setPasteCount(Number(e.target.value) || 1)} />
           </label>
           <button onClick={applyBulk} disabled={!selected.size}>
             bulk: transpose {bulkStep > 0 ? '+ respace' : ''}
           </button>
           <label className="mini-field">
-            transpose (st)
+            st
             <input type="number" min={-11} max={11} value={bulkTranspose} onChange={(e) => setBulkTranspose(Number(e.target.value) || 0)} />
           </label>
           <label className="mini-field">
@@ -829,6 +828,20 @@ export function PracticeTab(props: PracticeSharedProps) {
     </section>
   );
 
+  const leftColumn = (
+    <aside className="controls practice-controls">
+      {transportBar}
+      {editorSection}
+    </aside>
+  );
+
+  const rightColumn = (
+    <div className="practice-right">
+      {viewerStack}
+      <div className="practice-timeline-row">{timelineSection}</div>
+    </div>
+  );
+
   return (
     <div className="practice practice-layout">
       <audio
@@ -842,15 +855,10 @@ export function PracticeTab(props: PracticeSharedProps) {
         onEnded={() => setPlaying(false)}
       />
 
-      {/* Top row: track controls (left, narrow) + now/up-next viewers (right, full width). */}
-      <aside className="controls practice-controls">{trackPanel}</aside>
-      <div className="practice-right">{viewerStack}</div>
-
-      {/* Bottom row: arrange-view timeline spanning the full width. */}
-      <div className="practice-timeline-row">{timelineSection}</div>
-
-      {/* Progression editor spans the full width below the timeline. */}
-      <div className="practice-editor-row">{editorSection}</div>
+      {/* Two-column body: controls + progression editor (left), viewers with the
+          arrange-style timeline pinned at the bottom of the right pane. */}
+      {leftColumn}
+      {rightColumn}
     </div>
   );
 }
