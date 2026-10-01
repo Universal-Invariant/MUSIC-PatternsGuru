@@ -123,9 +123,17 @@ describe('sanitizeSegment', () => {
     expect(Array.isArray(s?.overlays)).toBe(true);
   });
 
-  it('preserves optional endTime and label', () => {
+  it('migrates legacy endTime to end and preserves label', () => {
     const s = sanitizeSegment({ time: 0, endTime: 4, root: 'C', scaleId: null, label: 'vamp' });
-    expect(s?.endTime).toBe(4);
+    expect(s?.end).toBe(4);
+    expect((s as unknown as Record<string, unknown>).endTime).toBeUndefined();
     expect(s?.label).toBe('vamp');
+  });
+
+  it('accepts the canonical end field (#7)', () => {
+    const s = sanitizeSegment({ time: 2, end: 6, root: 'C', scaleId: null });
+    expect(s?.end).toBe(6);
+    // end <= time is rejected (no zero/negative-length segments)
+    expect(sanitizeSegment({ time: 5, end: 3, root: 'C', scaleId: null })?.end).toBeUndefined();
   });
 });

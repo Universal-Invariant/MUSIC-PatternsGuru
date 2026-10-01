@@ -36,8 +36,12 @@ export interface Segment {
   readonly id: string;
   /** Seconds from the top of the track where this change takes effect. */
   readonly time: number;
-  /** Optional explicit end time (s). When absent, the segment ends at the next marker. */
-  readonly endTime?: number;
+  /**
+   * Explicit end time (s) — exclusive (#7). When absent, the segment runs
+   * until the next marker's start (or the end of the track). Legacy JSON
+   * exports that used `endTime` are migrated on import.
+   */
+  readonly end?: number;
   readonly scaleId: string | null;
   /** Scale root as a note token (`'D'`, `'F#'`, `'Bb'`). */
   readonly root: string;
@@ -409,14 +413,15 @@ export function sanitizeSegment(raw: unknown): Segment | null {
         })
         .filter((o): o is OverlaySpec => o !== null)
     : [];
-  const endTime = Number(r.endTime);
+  // #7: canonical field is `end`; legacy exports used `endTime` — migrate on read.
+  const endRaw = r.end !== undefined ? Number(r.end) : Number((r as Record<string, unknown>).endTime);
   // #2: free-text labels survive sanitization; unknown template ids are
   // dropped to null so the UI can flag them instead of rendering nothing.
   const labelOk = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : undefined;
   return {
     id: typeof r.id === 'string' ? r.id : uid(),
     time,
-    ...(Number.isFinite(endTime) && endTime > time ? { endTime } : {}),
+    ...(Number.isFinite(endRaw) && endRaw > time ? { end: endRaw } : {}),
     scaleId: scaleId && SCALE_TEMPLATES.some((t) => t.id === scaleId) ? scaleId : null,
     root,
     chordId: chordId && CHORD_TEMPLATES.some((t) => t.id === chordId) ? chordId : null,
@@ -693,11 +698,32 @@ export function PracticeTab(props: PracticeSharedProps) {
     [segments],
   );
 
+  /** Next marker's start time in sorted order (implicit end for open-ended clips). */
+  const nextStartByIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    for (let k = 0; k < sorted.length - 1; k++) map.set(sorted[k]!.i, sorted[k + 1]!.s.time);
+    return map;
+  }, [sorted]);
+
+  /**
+   * Index of the segment that is sounding at the playhead (#7). Segments with
+   * an explicit `end` only cover [time, end); gap segments run until the next
+   * marker. If the playhead falls in a gap (e.g. after a short clip or past
+   * the last explicit end) no board is shown rather than silently holding the
+   * previous chord.
+   */
   const activeIdx = useMemo(() => {
     let best = -1;
-    for (const { s, i } of sorted) if (s.time <= currentTime + 1e-6) best = i;
+    for (const { s, i } of sorted) {
+      if (s.time <= currentTime + 1e-6) {
+        const e = segEnd(s, nextStartByIndex.get(i));
+        if (currentTime < e - 1e-6 || (i === segments.length - 1 && s.end === undefined)) best = i;
+        else best = -1; // playhead is inside an explicit gap after this segment
+      }
+    }
     return best;
-  }, [sorted, currentTime]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted, currentTime, nextStartByIndex]);
 
   const nextSeg = useMemo(() => {
     for (const { s } of sorted) if (s.time > currentTime + 1e-6) return s;
@@ -735,7 +761,7 @@ export function PracticeTab(props: PracticeSharedProps) {
   );
 
   const span =
-    Math.max(duration, ...segments.map((s) => s.time), ...segments.map((s) => s.endTime ?? 0), 30) * 1.05 || 30;
+    Math.max(duration, ...segments.map((s) => s.time), ...segments.map((s) => s.end ?? 0), 30) * 1.05 || 30;
 
   /** Visible (un-zoomed) width of the timeline — used for "fit" zoom. */
   function visibleSpan(): number {
@@ -990,12 +1016,12 @@ export function PracticeTab(props: PracticeSharedProps) {
         out[d.idx] = { ...d.orig, time: clampT(d.orig.time + dt) };
       } else if (d.mode === 'start') {
         // Dragging the left edge changes the start; keep the right edge fixed.
-        const fixedEnd = d.orig.endTime ?? nextStartByIndex.get(d.idx) ?? span;
+        const fixedEnd = d.orig.end ?? nextStartByIndex.get(d.idx) ?? span;
         const newStart = Math.min(clampT(t), fixedEnd - 0.05);
         out[d.idx] = { ...d.orig, time: Math.max(0, newStart) };
       } else {
         // Right-edge resize sets an explicit end time.
-        out[d.idx] = { ...d.orig, endTime: Math.max(d.orig.time + 0.05, clampT(t)) };
+        out[d.idx] = { ...d.orig, end: Math.max(d.orig.time + 0.05, clampT(t)) };
       }
       return out;
     });
@@ -1022,10 +1048,10 @@ export function PracticeTab(props: PracticeSharedProps) {
           if (!cur) return list;
           const snapped = Math.round(cur.time / step) * step;
           let next = { ...cur, time: clampT(snapped) };
-          if (d.mode === 'end' && cur.endTime !== undefined) {
-            next = { ...next, endTime: Math.max(next.time + 0.05, clampT(Math.round(cur.endTime / step) * step)) };
+          if (d.mode === 'end' && cur.end !== undefined) {
+            next = { ...next, end: Math.max(next.time + 0.05, clampT(Math.round(cur.end / step) * step)) };
           } else if (d.mode === 'start') {
-            const fixedEnd = cur.endTime ?? nextStartByIndex.get(d.idx) ?? span;
+            const fixedEnd = cur.end ?? nextStartByIndex.get(d.idx) ?? span;
             if (next.time > fixedEnd - 0.05) next = { ...next, time: Math.max(0, fixedEnd - 0.05) };
           }
           return list.map((s, j) => (j === d.idx ? next : s));
@@ -1035,9 +1061,9 @@ export function PracticeTab(props: PracticeSharedProps) {
     }
   }
 
-  /** Effective end of a segment: explicit endTime if valid, else next marker's start. */
+  /** Effective end of a segment: explicit end if valid, else next marker's start. */
   function segEnd(seg: Segment, nextTime: number | undefined): number {
-    const e = seg.endTime;
+    const e = seg.end;
     if (e !== undefined && Number.isFinite(e) && e > seg.time) return e;
     if (nextTime !== undefined && nextTime > seg.time) return nextTime;
     return span;
@@ -1088,13 +1114,6 @@ export function PracticeTab(props: PracticeSharedProps) {
     }
     return seg.label ?? r;
   }
-
-  /** Next marker's start time in sorted order (implicit end for clips without endTime). */
-  const nextStartByIndex = useMemo(() => {
-    const map = new Map<number, number>();
-    for (let k = 0; k < sorted.length - 1; k++) map.set(sorted[k]!.i, sorted[k + 1]!.s.time);
-    return map;
-  }, [sorted]);
 
   /** Seconds → 'bar:beat' at the current bpm (for editor tooltips / bar mode). */
   function toBarBeat(sec: number): string | null {
@@ -1218,11 +1237,11 @@ export function PracticeTab(props: PracticeSharedProps) {
                     <span className="tl-clip-label">{clipLabel(s)}</span>
                     <span
                       className="tl-handle tl-handle-end"
-                      title={s.endTime !== undefined ? 'drag: change end time · dbl-click clears explicit end' : 'drag: set end time'}
+                      title={s.end !== undefined ? 'drag: change end time · dbl-click clears explicit end' : 'drag: set end time'}
                       onPointerDown={(e) => beginClipDrag(e, i, 'end')}
                       onDoubleClick={(e) => {
                         e.stopPropagation();
-                        patch(i, { endTime: undefined });
+                        patch(i, { end: undefined });
                       }}
                     />
                   </div>
