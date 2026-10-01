@@ -36,6 +36,8 @@ export interface Segment {
   readonly id: string;
   /** Seconds from the top of the track where this change takes effect. */
   readonly time: number;
+  /** Optional explicit end time (s). When absent, the segment ends at the next marker. */
+  readonly endTime?: number;
   readonly scaleId: string | null;
   /** Scale root as a note token (`'D'`, `'F#'`, `'Bb'`). */
   readonly root: string;
@@ -202,6 +204,10 @@ export function PracticeTab(props: PracticeSharedProps) {
   const urlRef = useRef<string | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
 
+  /** Timeline clip-drag state (move / resize start / resize end). */
+  const tlDrag = useRef<{ mode: 'move' | 'start' | 'end'; idx: number; grabTime: number; orig: Segment } | null>(null);
+  const tlMoved = useRef(false);
+
   useEffect(() => {
     return () => {
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -251,12 +257,11 @@ export function PracticeTab(props: PracticeSharedProps) {
   }, [sorted, currentTime]);
 
   const nextSeg = useMemo(() => {
-    for (const { s } of sorted) if (s.time > currentTime) return s;
+    for (const { s } of sorted) if (s.time > currentTime + 1e-6) return s;
     return undefined;
   }, [sorted, currentTime]);
 
-  const frame = useMemo(() => {
-    const seg = activeIdx >= 0 ? segments[activeIdx] : undefined;
+  const frameOf = (seg: Segment | undefined) => {
     const patterns = seg ? segmentPatterns(seg) : [];
     const scene = buildScene(props.instrument, {
       patterns,
@@ -269,9 +274,22 @@ export function PracticeTab(props: PracticeSharedProps) {
       showOverlap: patterns.length >= 2,
     });
     return presenter.present(scene);
-  }, [props, segments, activeIdx]);
+  };
 
-  const span = Math.max(duration, ...segments.map((s) => s.time), 30) * 1.05 || 30;
+  const frame = useMemo(
+    () => frameOf(activeIdx >= 0 ? segments[activeIdx] : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props, segments, activeIdx],
+  );
+
+  const nextFrame = useMemo(
+    () => frameOf(nextSeg),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props, nextSeg],
+  );
+
+  const span =
+    Math.max(duration, ...segments.map((s) => s.time), ...segments.map((s) => s.endTime ?? 0), 30) * 1.05 || 30;
 
   function timeFromEvent(e: { clientX: number }): number {
     const rect = barRef.current?.getBoundingClientRect();
@@ -404,8 +422,85 @@ export function PracticeTab(props: PracticeSharedProps) {
 
   const selectedSeg = selected.size === 1 ? segments[[...selected][0]!] : undefined;
 
+  /* ---- timeline clip dragging ------------------------------------------- */
+
+  function clampT(t: number): number {
+    return Math.min(span, Math.max(0, t));
+  }
+
+  function beginClipDrag(e: React.PointerEvent, idx: number, mode: 'move' | 'start' | 'end') {
+    e.stopPropagation();
+    e.preventDefault();
+    const bar = barRef.current;
+    if (bar) {
+      try {
+        bar.setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer capture unsupported — fine */
+      }
+    }
+    tlDrag.current = { mode, idx, grabTime: timeFromEvent(e), orig: segments[idx]! };
+    tlMoved.current = false;
+    selectRow(idx, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey } as React.MouseEvent);
+  }
+
+  function onTimelinePointerMove(e: React.PointerEvent) {
+    const d = tlDrag.current;
+    if (!d) return;
+    const t = clampT(timeFromEvent(e));
+    const dt = t - d.grabTime;
+    if (Math.abs(dt) > 0.02) tlMoved.current = true;
+    setSegments((list) => {
+      const out = [...list];
+      const cur = list[d.idx]!;
+      if (d.mode === 'move') {
+        out[d.idx] = { ...cur, time: clampT(d.orig.time + dt) };
+      } else if (d.mode === 'start') {
+        // Dragging the left edge changes the start; keep the right edge fixed.
+        const fixedEnd = cur.endTime ?? nextStartByIndex.get(d.idx) ?? span;
+        const newStart = Math.min(clampT(t), fixedEnd - 0.05);
+        out[d.idx] = { ...cur, time: Math.max(0, newStart) };
+      } else {
+        // Right-edge resize sets an explicit end time.
+        out[d.idx] = { ...cur, endTime: Math.max(cur.time + 0.05, clampT(t)) };
+      }
+      return out;
+    });
+  }
+
+  function onTimelinePointerUp(e: React.PointerEvent) {
+    if (tlDrag.current) {
+      const bar = barRef.current;
+      if (bar) {
+        try {
+          bar.releasePointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+      }
+      // A plain click on a clip seeks to its start (only if it wasn't a drag).
+      if (!tlMoved.current && tlDrag.current.mode === 'move') seek(segments[tlDrag.current.idx]!.time);
+      tlDrag.current = null;
+    }
+  }
+
+  /** Effective end of a segment: explicit endTime if valid, else next marker's start. */
+  function segEnd(seg: Segment, nextTime: number | undefined): number {
+    const e = seg.endTime;
+    if (e !== undefined && Number.isFinite(e) && e > seg.time) return e;
+    if (nextTime !== undefined && nextTime > seg.time) return nextTime;
+    return span;
+  }
+
+  /** Next marker's start time in sorted order (implicit end for clips without endTime). */
+  const nextStartByIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    for (let k = 0; k < sorted.length - 1; k++) map.set(sorted[k]!.i, sorted[k + 1]!.s.time);
+    return map;
+  }, [sorted]);
+
   return (
-    <div className="practice">
+    <div className="practice practice-layout">
       <audio
         ref={audioRef}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
@@ -417,6 +512,8 @@ export function PracticeTab(props: PracticeSharedProps) {
         onEnded={() => setPlaying(false)}
       />
 
+      {/* Left column: track + progression editor */}
+      <aside className="controls">
       <section className="panel">
         <h2>Track</h2>
         <div className="row" style={{ alignItems: 'center', gap: 8 }}>
@@ -442,48 +539,110 @@ export function PracticeTab(props: PracticeSharedProps) {
         </div>
         {audioName && <div className="muted" style={{ fontSize: 12 }}>{audioName}</div>}
       </section>
+      </aside>
 
-      <section className="panel">
-        <h2>Timeline — click to seek, double-click to add a marker</h2>
-        <div
-          className="timeline"
-          ref={barRef}
-          onPointerDown={(e) => {
-            if (e.detail >= 2) return;
-            seek(timeFromEvent(e));
-          }}
-          onDoubleClick={(e) => addMarkerAt(timeFromEvent(e))}
-        >
-          {loopRegion && (
-            <div
-              className="timeline-loop"
-              style={{ left: `${(loopRegion.start / span) * 100}%`, width: `${((loopRegion.end - loopRegion.start) / span) * 100}%` }}
-            />
-          )}
-          {segments.map((s, i) => (
-            <div
-              key={s.id}
-              className={`timeline-marker${i === activeIdx ? ' active' : ''}`}
-              style={{ left: `${(s.time / span) * 100}%` }}
-              title={`${fmtTime(s.time)} — ${segmentName(s)}`}
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                selectRow(i, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey } as React.MouseEvent);
-                seek(s.time);
-              }}
-            >
-              <span className="timeline-marker-label">{SHARP_NAMES[tokenPc(s.root)] ?? s.root}</span>
+      {/* Right column: viewer (current on top, upcoming below) + timeline at the bottom */}
+      <div className="practice-right">
+        <section className="panel practice-viewer">
+          <div className="practice-pane pane-current">
+            <div className="board-card">
+              <div className="caption">
+                <strong>
+                  {props.instrument.name} — now ({activeIdx >= 0 ? segmentName(segments[activeIdx]!) : 'no active change yet'})
+                </strong>
+                {nextSeg && <span>changes @ {fmtTime(nextSeg.time)}</span>}
+              </div>
+              <FrameSvg frame={frame} />
             </div>
-          ))}
-          <div className="timeline-playhead" style={{ left: `${Math.min(100, (currentTime / span) * 100)}%` }} />
-        </div>
-        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-          Active: {activeIdx >= 0 ? `${segmentName(segments[activeIdx]!)} (${fmtTime(segments[activeIdx]!.time)})` : 'none yet'}
-        </div>
-      </section>
+          </div>
+          <div className="practice-pane pane-next">
+            <div className="board-card upcoming">
+              <div className="caption">
+                <strong>up next — prepare this shape</strong>
+                <span>{nextSeg ? `${segmentName(nextSeg)} @ ${fmtTime(nextSeg.time)}` : 'nothing queued'}</span>
+              </div>
+              {nextSeg ? (
+                <FrameSvg frame={nextFrame} />
+              ) : (
+                <div className="pane-empty muted">end of progression reached</div>
+              )}
+            </div>
+          </div>
+        </section>
 
-      <section className="panel">
-        <h2>Progression editor ({segments.length} changes)</h2>
+        <section className="panel">
+          <h2>Timeline — click to seek · double-click to add a marker · drag clips to move / resize edges</h2>
+          <div className="timeline-track">
+            <div className="timeline-timeaxis" aria-hidden="true">
+              {Array.from({ length: 7 }, (_, k) => {
+                const t = (span / 6) * k;
+                return (
+                  <span key={k} className="tick" style={{ left: `${(t / span) * 100}%` }}>
+                    {fmtTime(t)}
+                  </span>
+                );
+              })}
+            </div>
+            <div
+              className="timeline"
+              ref={barRef}
+              onPointerDown={(e) => {
+                if (tlDrag.current) return;
+                seek(timeFromEvent(e));
+              }}
+              onDoubleClick={(e) => addMarkerAt(timeFromEvent(e))}
+              onPointerMove={onTimelinePointerMove}
+              onPointerUp={onTimelinePointerUp}
+              onPointerCancel={onTimelinePointerUp}
+            >
+              {loopRegion && (
+                <div
+                  className="timeline-loop"
+                  style={{ left: `${(loopRegion.start / span) * 100}%`, width: `${((loopRegion.end - loopRegion.start) / span) * 100}%` }}
+                />
+              )}
+              {segments.map((s, i) => {
+                const end = segEnd(s, nextStartByIndex.get(i));
+                const left = Math.min(100, (s.time / span) * 100);
+                const width = Math.max(0.75, ((end - s.time) / span) * 100);
+                const cls = ['tl-clip', i === activeIdx ? 'active' : '', selected.has(i) ? 'sel' : ''].filter(Boolean).join(' ');
+                return (
+                  <div
+                    key={s.id}
+                    className={cls}
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={`${fmtTime(s.time)} – ${fmtTime(end)} · ${segmentName(s)} (drag: move · edges: resize)`}
+                    onPointerDown={(e) => beginClipDrag(e, i, 'move')}
+                  >
+                    <span
+                      className="tl-handle tl-handle-start"
+                      title="drag: change start time"
+                      onPointerDown={(e) => beginClipDrag(e, i, 'start')}
+                    />
+                    <span className="tl-clip-label">{SHARP_NAMES[tokenPc(s.root)] ?? s.root}</span>
+                    <span
+                      className="tl-handle tl-handle-end"
+                      title={s.endTime !== undefined ? 'drag: change end time · dbl-click clears explicit end' : 'drag: set end time'}
+                      onPointerDown={(e) => beginClipDrag(e, i, 'end')}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        patch(i, { endTime: undefined });
+                      }}
+                    />
+                  </div>
+                );
+              })}
+              <div className="timeline-playhead" style={{ left: `${Math.min(100, (currentTime / span) * 100)}%` }} />
+            </div>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Active: {activeIdx >= 0 ? `${segmentName(segments[activeIdx]!)} (${fmtTime(segments[activeIdx]!.time)})` : 'none yet'}
+            {nextSeg ? ` → next @ ${fmtTime(nextSeg.time)}: ${segmentName(nextSeg)}` : ''}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Progression editor ({segments.length} changes)</h2>
         <div className="row prog-toolbar" style={{ flexWrap: 'wrap', gap: 6 }}>
           <button onClick={() => addMarkerAt(currentTime)}>+ marker @ play head</button>
           <button onClick={duplicateSelected} disabled={!selected.size}>duplicate</button>
@@ -677,17 +836,8 @@ export function PracticeTab(props: PracticeSharedProps) {
             </button>
           </div>
         )}
-      </section>
-
-      <section className="board-card">
-        <div className="caption">
-          <strong>
-            {props.instrument.name} — {frame.mode} notation
-          </strong>
-          <span>{activeIdx >= 0 ? segmentName(segments[activeIdx]!) : 'no active change yet'}</span>
-        </div>
-        <FrameSvg frame={frame} />
-      </section>
+        </section>
+      </div>
     </div>
   );
 }

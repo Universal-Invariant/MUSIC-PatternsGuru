@@ -364,13 +364,86 @@ footer.statusbar {
   padding: 14px 16px;
   width: 100%;
 }
-.practice-layout { padding: 0; }
+/* Two-column arrange like the playground: controls left, viewer + timeline right. */
+.practice.practice-layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 18px;
+  padding: 18px 22px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .practice.practice-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.practice-right {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Viewer stack: current fretboard on top, upcoming change underneath for anticipation. */
+.practice-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.practice-pane.pane-current .board-card svg {
+  max-height: 46vh;
+  width: 100%;
+  height: auto;
+}
+.practice-pane.pane-next .board-card.upcoming {
+  border-style: dashed;
+  opacity: 0.92;
+}
+.practice-pane.pane-next .board-card.upcoming svg {
+  max-height: 27vh;
+  width: 100%;
+  height: auto;
+}
+.board-card.upcoming .caption strong {
+  color: #aed581;
+}
+.pane-empty {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.timeline-track {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.timeline-timeaxis {
+  position: relative;
+  height: 16px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.timeline-timeaxis .tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.timeline-timeaxis .tick:first-child {
+  transform: none;
+}
+.timeline-timeaxis .tick:last-child {
+  transform: translateX(-100%);
+}
 
 .timeline {
   position: relative;
-  height: 46px;
+  height: 64px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.045) 0 1px, transparent 1px calc(100% / 24)),
+    rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   cursor: crosshair;
   touch-action: none;
@@ -383,6 +456,7 @@ footer.statusbar {
   width: 2px;
   background: #ff5d8f;
   pointer-events: none;
+  z-index: 5;
 }
 .timeline-loop {
   position: absolute;
@@ -393,21 +467,59 @@ footer.statusbar {
   border-right: 1px dashed #4dd0e1;
   pointer-events: none;
 }
-.timeline-marker {
+/* Arrange-view clips: one horizontal block per progression change. */
+.tl-clip {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
-  width: 10px;
-  margin-left: -5px;
-  border-radius: 3px;
-  background: #4dd0e1;
-  border: 1px solid rgba(0, 0, 0, 0.4);
-  cursor: pointer;
+  top: 8px;
+  bottom: 8px;
+  min-width: 8px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, rgba(77, 208, 225, 0.5), rgba(77, 208, 225, 0.28));
+  border: 1px solid rgba(77, 208, 225, 0.75);
+  cursor: grab;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
+  user-select: none;
+  touch-action: none;
 }
-.timeline-marker.active { background: #aed581; }
+.tl-clip.sel {
+  border-color: #ff5d8f;
+  box-shadow: 0 0 0 1px rgba(255, 93, 143, 0.6);
+}
+.tl-clip.active {
+  background: linear-gradient(180deg, rgba(174, 213, 129, 0.55), rgba(174, 213, 129, 0.3));
+  border-color: #aed581;
+}
+.tl-clip-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #eaf6ff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  padding: 0 8px;
+}
+.tl-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  border-radius: 4px;
+}
+.tl-handle:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.tl-handle-start {
+  left: 0;
+}
+.tl-handle-end {
+  right: 0;
+}
 .timeline-marker-label {
   position: absolute;
   top: 100%;
