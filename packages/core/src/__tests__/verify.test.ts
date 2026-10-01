@@ -8,6 +8,27 @@ import { guitarStandard as guitar } from "../../../instruments/src/index.js";
 
 const names = (p: Parameters<typeof spellPattern>[0]) => spellPattern(p).map(formatSpelling);
 
+describe('buildScene purity', () => {
+  it('never mutates the caller-supplied pattern/overlay arrays (#3)', () => {
+    const scale = rootTemplateAt(findTemplate('dorian')!, 'D');
+    const chord = rootTemplateAt(findTemplate('min7')!, 'D');
+    const overlay = rootTemplateAt(findTemplate('maj7')!, 'G');
+    const patterns = [scale, chord];
+    const overlays = [overlay];
+    const toggles = { connectors: true, labels: true, background: false, effects: false };
+    const before = JSON.stringify({ patterns, overlays, toggles });
+    const scene = buildScene(guitar, { patterns, overlayChords: overlays, toggles, mode: 'tonal' });
+    // Frozen inputs would throw on any in-place write; plain arrays must be untouched.
+    expect(JSON.stringify({ patterns, overlays, toggles })).toBe(before);
+    // The returned scene must not alias the caller's arrays either.
+    const scenePatterns = scene.patterns as unknown as Pattern[]; // readonly at the type level — verify runtime copy too
+    expect(scenePatterns).not.toBe(patterns);
+    scenePatterns.push(scale);
+    expect(patterns.length).toBe(2);
+    expect(scenePatterns.length).toBe(4); // 2 base + 1 overlay + our push
+  });
+});
+
 describe('spelling fixes', () => {
   it('D harmonic minor uses C# not Db', () => {
     const t = findTemplate('harmonic minor')!;

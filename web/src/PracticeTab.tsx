@@ -9,7 +9,7 @@
  * bulk-copy/bulk-paste and bulk modify so songs with 200+ changes stay easy.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PALETTES,
   pc,
@@ -203,6 +203,9 @@ export function PracticeTab(props: PracticeSharedProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
+  /** Latest loop region, readable from the rAF callback without re-subscribing. */
+  const loopRef = useRef<{ start: number; end: number } | null>(null);
+  loopRef.current = loopRegion;
 
   /** Timeline clip-drag state (move / resize start / resize end). */
   const tlDrag = useRef<{ mode: 'move' | 'start' | 'end'; idx: number; grabTime: number; orig: Segment } | null>(null);
@@ -214,6 +217,27 @@ export function PracticeTab(props: PracticeSharedProps) {
     };
   }, []);
 
+  /**
+   * Smooth play-head clock. `timeupdate` only fires ~4×/s which makes the
+   * playhead, active-change detection and viewer switches stutter; instead we
+   * poll `audio.currentTime` with requestAnimationFrame while playing (#5).
+   */
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const el = audioRef.current;
+      if (el) {
+        const loop = loopRef.current;
+        if (loop && el.currentTime > loop.end) el.currentTime = loop.start;
+        setCurrentTime(el.currentTime);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+
   function onFile(f: File | undefined) {
     if (!f) return;
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -224,18 +248,35 @@ export function PracticeTab(props: PracticeSharedProps) {
     if (el) {
       el.src = url;
       el.load();
+      captureDuration(el); // #4: duration may still be NaN for blob URLs — retry on loadedmetadata
     }
   }
 
   function togglePlay() {
     const el = audioRef.current;
     if (!el || !el.src) return;
-    if (el.paused) void el.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
-    else {
+    if (el.paused) {
+      void el
+        .play()
+        .then(() => setPlaying(true))
+        .catch(() => setPlaying(false));
+    } else {
       el.pause();
       setPlaying(false);
     }
   }
+
+  /** Duration can be NaN/0 until metadata has loaded — retry on 'loadedmetadata'. */
+  const captureDuration = useCallback((el: HTMLAudioElement) => {
+    if (Number.isFinite(el.duration) && el.duration > 0) {
+      setDuration(el.duration);
+      return;
+    }
+    const onMeta = () => {
+      if (Number.isFinite(el.duration) && el.duration > 0) setDuration(el.duration);
+    };
+    el.addEventListener('loadedmetadata', onMeta, { once: true });
+  }, []);
 
   function seek(t: number) {
     const el = audioRef.current;
@@ -300,6 +341,7 @@ export function PracticeTab(props: PracticeSharedProps) {
 
   function patch(i: number, up: Partial<Segment>) {
     setSegments((list) => list.map((s, j) => (j === i ? { ...s, ...up } : s)));
+    setSelected((sel) => (sel.has(i) ? sel : new Set([i])));
   }
 
   function addMarkerAt(time: number) {
@@ -312,8 +354,14 @@ export function PracticeTab(props: PracticeSharedProps) {
     });
   }
 
+  /** Remove by stable id (never positional) so stale index sets can't delete the wrong row (#6). */
+  function removeById(id: string) {
+    setSegments((list) => list.filter((s) => s.id !== id));
+  }
+
   function removeSelected() {
-    setSegments((list) => list.filter((_, i) => !selected.has(i)));
+    const ids = new Set(segments.filter((_, i) => selected.has(i)).map((s) => s.id));
+    setSegments((list) => list.filter((s) => !ids.has(s.id)));
     setSelected(new Set());
   }
 
@@ -478,8 +526,26 @@ export function PracticeTab(props: PracticeSharedProps) {
           /* ignore */
         }
       }
+      const d = tlDrag.current;
       // A plain click on a clip seeks to its start (only if it wasn't a drag).
-      if (!tlMoved.current && tlDrag.current.mode === 'move') seek(segments[tlDrag.current.idx]!.time);
+      if (!tlMoved.current && d.mode === 'move') seek(segments[d.idx]!.time);
+      // Snap the final position/end to the editor's step grid (#1).
+      const step = bulkStep > 0 ? bulkStep : 0;
+      if (step > 0) {
+        setSegments((list) => {
+          const cur = list[d.idx];
+          if (!cur) return list;
+          const snapped = Math.round(cur.time / step) * step;
+          let next = { ...cur, time: clampT(snapped) };
+          if (d.mode === 'end' && cur.endTime !== undefined) {
+            next = { ...next, endTime: Math.max(next.time + 0.05, clampT(Math.round(cur.endTime / step) * step)) };
+          } else if (d.mode === 'start') {
+            const fixedEnd = cur.endTime ?? nextStartByIndex.get(d.idx) ?? span;
+            if (next.time > fixedEnd - 0.05) next = { ...next, time: Math.max(0, fixedEnd - 0.05) };
+          }
+          return list.map((s, j) => (j === d.idx ? next : s));
+        });
+      }
       tlDrag.current = null;
     }
   }
@@ -765,7 +831,7 @@ export function PracticeTab(props: PracticeSharedProps) {
                   </td>
                   <td className="mono">{s.overlays.map((o) => SHARP_NAMES[pcAdd(tokenPc(s.root), o.offset)] ?? '?').join(' ')}</td>
                   <td>
-                    <button className="overlay-remove" aria-label={`remove row ${i + 1}`} onClick={() => setSegments((l) => l.filter((_, j) => j !== i))}>
+                    <button className="overlay-remove" aria-label={`remove row ${i + 1}`} onClick={() => removeById(s.id)}>
                       ×
                     </button>
                   </td>
