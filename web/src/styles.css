@@ -364,17 +364,27 @@ footer.statusbar {
   padding: 14px 16px;
   width: 100%;
 }
-/* Two-column arrange like the playground: controls left, viewer + timeline right. */
+/* Arrange-style layout: top row = controls (narrow) + viewer stack (wide);
+   timeline and progression editor span the FULL width in their own rows below. */
 .practice.practice-layout {
   display: grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 18px;
   padding: 18px 22px;
   align-items: start;
 }
+.practice-timeline-row,
+.practice-editor-row {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.practice-controls {
+  position: static;
+  min-width: 0;
+}
 @media (max-width: 900px) {
   .practice.practice-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .practice-right {
@@ -389,20 +399,22 @@ footer.statusbar {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
-.practice-pane.pane-current .board-card svg {
-  max-height: 46vh;
+/* SVGs have fixed pixel width/height attributes; scale them to fit their pane
+   while preserving aspect ratio so nothing gets squashed into a narrow strip. */
+.board-card svg.frame-fit {
+  display: block;
   width: 100%;
   height: auto;
+  max-height: 52vh;
 }
 .practice-pane.pane-next .board-card.upcoming {
   border-style: dashed;
   opacity: 0.92;
 }
-.practice-pane.pane-next .board-card.upcoming svg {
-  max-height: 27vh;
-  width: 100%;
-  height: auto;
+.practice-pane.pane-next .board-card.upcoming svg.frame-fit {
+  max-height: 30vh;
 }
 .board-card.upcoming .caption strong {
   color: #aed581;

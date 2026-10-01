@@ -499,79 +499,39 @@ export function PracticeTab(props: PracticeSharedProps) {
     return map;
   }, [sorted]);
 
-  return (
-    <div className="practice practice-layout">
-      <audio
-        ref={audioRef}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onTimeUpdate={(e) => {
-          const el = e.currentTarget;
-          if (loopRegion && el.currentTime > loopRegion.end) el.currentTime = loopRegion.start;
-          setCurrentTime(el.currentTime);
-        }}
-        onEnded={() => setPlaying(false)}
-      />
-
-      {/* Left column: track + progression editor */}
-      <aside className="controls">
-      <section className="panel">
-        <h2>Track</h2>
-        <div className="row" style={{ alignItems: 'center', gap: 8 }}>
-          <input type="file" accept="audio/*" onChange={(e) => onFile(e.target.files?.[0])} />
-          <button onClick={togglePlay} disabled={!audioName}>
-            {playing ? '⏸ pause' : '▶ play'}
-          </button>
-          <span className="mono">
-            {fmtTime(currentTime)} / {duration ? fmtTime(duration) : '--:--'}
-          </span>
-          {nextSeg && (
-            <span className="muted">next @ {fmtTime(nextSeg.time)}: {segmentName(nextSeg)}</span>
-          )}
-          <button
-            onClick={() =>
-              setLoopRegion(loopRegion ? null : { start: currentTime, end: currentTime + 8 })
-            }
-            disabled={!audioName}
-            title="Toggle looping around the play head"
-          >
-            {loopRegion ? 'loop: on' : 'loop: off'}
-          </button>
+  // Shared content pieces (rendered into the stacked or side-by-side layout).
+  const viewerStack = (
+    <section className="panel practice-viewer">
+      <div className="practice-pane pane-current">
+        <div className="board-card">
+          <div className="caption">
+            <strong>
+              {props.instrument.name} — now ({activeIdx >= 0 ? segmentName(segments[activeIdx]!) : 'no active change yet'})
+            </strong>
+            {nextSeg && <span>changes @ {fmtTime(nextSeg.time)}</span>}
+          </div>
+          <FrameSvg frame={frame} className="frame-fit" />
         </div>
-        {audioName && <div className="muted" style={{ fontSize: 12 }}>{audioName}</div>}
-      </section>
-      </aside>
-
-      {/* Right column: viewer (current on top, upcoming below) + timeline at the bottom */}
-      <div className="practice-right">
-        <section className="panel practice-viewer">
-          <div className="practice-pane pane-current">
-            <div className="board-card">
-              <div className="caption">
-                <strong>
-                  {props.instrument.name} — now ({activeIdx >= 0 ? segmentName(segments[activeIdx]!) : 'no active change yet'})
-                </strong>
-                {nextSeg && <span>changes @ {fmtTime(nextSeg.time)}</span>}
-              </div>
-              <FrameSvg frame={frame} />
-            </div>
+      </div>
+      <div className="practice-pane pane-next">
+        <div className="board-card upcoming">
+          <div className="caption">
+            <strong>up next — prepare this shape</strong>
+            <span>{nextSeg ? `${segmentName(nextSeg)} @ ${fmtTime(nextSeg.time)}` : 'nothing queued'}</span>
           </div>
-          <div className="practice-pane pane-next">
-            <div className="board-card upcoming">
-              <div className="caption">
-                <strong>up next — prepare this shape</strong>
-                <span>{nextSeg ? `${segmentName(nextSeg)} @ ${fmtTime(nextSeg.time)}` : 'nothing queued'}</span>
-              </div>
-              {nextSeg ? (
-                <FrameSvg frame={nextFrame} />
-              ) : (
-                <div className="pane-empty muted">end of progression reached</div>
-              )}
-            </div>
-          </div>
-        </section>
+          {nextSeg ? (
+            <FrameSvg frame={nextFrame} className="frame-fit" />
+          ) : (
+            <div className="pane-empty muted">end of progression reached</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
 
-        <section className="panel">
-          <h2>Timeline — click to seek · double-click to add a marker · drag clips to move / resize edges</h2>
+  const timelineSection = (
+    <section className="panel">
+      <h2>Timeline — click to seek · double-click to add a marker · drag clips to move / resize edges</h2>
           <div className="timeline-track">
             <div className="timeline-timeaxis" aria-hidden="true">
               {Array.from({ length: 7 }, (_, k) => {
@@ -638,11 +598,41 @@ export function PracticeTab(props: PracticeSharedProps) {
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
             Active: {activeIdx >= 0 ? `${segmentName(segments[activeIdx]!)} (${fmtTime(segments[activeIdx]!.time)})` : 'none yet'}
             {nextSeg ? ` → next @ ${fmtTime(nextSeg.time)}: ${segmentName(nextSeg)}` : ''}
-          </div>
-        </section>
+      </div>
+    </section>
+  );
 
-        <section className="panel">
-          <h2>Progression editor ({segments.length} changes)</h2>
+  const trackPanel = (
+    <section className="panel">
+      <h2>Track</h2>
+      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <input type="file" accept="audio/*" onChange={(e) => onFile(e.target.files?.[0])} />
+        <button onClick={togglePlay} disabled={!audioName}>
+          {playing ? '⏸ pause' : '▶ play'}
+        </button>
+        <span className="mono">
+          {fmtTime(currentTime)} / {duration ? fmtTime(duration) : '--:--'}
+        </span>
+        {nextSeg && (
+          <span className="muted">next @ {fmtTime(nextSeg.time)}: {segmentName(nextSeg)}</span>
+        )}
+        <button
+          onClick={() =>
+            setLoopRegion(loopRegion ? null : { start: currentTime, end: currentTime + 8 })
+          }
+          disabled={!audioName}
+          title="Toggle looping around the play head"
+        >
+          {loopRegion ? 'loop: on' : 'loop: off'}
+        </button>
+      </div>
+      {audioName && <div className="muted" style={{ fontSize: 12 }}>{audioName}</div>}
+    </section>
+  );
+
+  const editorSection = (
+    <section className="panel">
+      <h2>Progression editor ({segments.length} changes)</h2>
         <div className="row prog-toolbar" style={{ flexWrap: 'wrap', gap: 6 }}>
           <button onClick={() => addMarkerAt(currentTime)}>+ marker @ play head</button>
           <button onClick={duplicateSelected} disabled={!selected.size}>duplicate</button>
@@ -836,8 +826,31 @@ export function PracticeTab(props: PracticeSharedProps) {
             </button>
           </div>
         )}
-        </section>
-      </div>
+    </section>
+  );
+
+  return (
+    <div className="practice practice-layout">
+      <audio
+        ref={audioRef}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+        onTimeUpdate={(e) => {
+          const el = e.currentTarget;
+          if (loopRegion && el.currentTime > loopRegion.end) el.currentTime = loopRegion.start;
+          setCurrentTime(el.currentTime);
+        }}
+        onEnded={() => setPlaying(false)}
+      />
+
+      {/* Top row: track controls (left, narrow) + now/up-next viewers (right, full width). */}
+      <aside className="controls practice-controls">{trackPanel}</aside>
+      <div className="practice-right">{viewerStack}</div>
+
+      {/* Bottom row: arrange-view timeline spanning the full width. */}
+      <div className="practice-timeline-row">{timelineSection}</div>
+
+      {/* Progression editor spans the full width below the timeline. */}
+      <div className="practice-editor-row">{editorSection}</div>
     </div>
   );
 }
