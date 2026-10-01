@@ -489,6 +489,11 @@ export function PracticeTab(props: PracticeSharedProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [loopRegion, setLoopRegion] = useState<{ start: number; end: number } | null>(saved?.loopRegion ?? null);
+  /* Metronome / count-in (#14): optional click track synced to the audio clock. */
+  const [metroOn, setMetroOn] = useState(false);
+  const [countInBeats, setCountInBeats] = useState(0);
+  const metroRef = useRef<{ on: boolean; beats: number }>({ on: false, beats: 0 });
+  metroRef.current = { on: metroOn, beats: countInBeats };
   const [clip, setClip] = useState<readonly Segment[]>([]);
   const [pasteCount, setPasteCount] = useState(1);
   const [bulkStep, setBulkStep] = useState(1);
@@ -516,6 +521,72 @@ export function PracticeTab(props: PracticeSharedProps) {
   /** Latest loop region, readable from the rAF callback without re-subscribing. */
   const loopRef = useRef<{ start: number; end: number } | null>(null);
   loopRef.current = loopRegion;
+
+  /* ---- Web-Audio metronome / count-in (#14) ------------------------------ */
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const metroTimerRef = useRef<number | null>(null);
+  const metroStateRef = useRef({ nextBeat: 0, beatIdx: 0 });
+
+  /** One click: short filtered noise burst; accent = higher pitch for downbeats. */
+  function scheduleClick(ctx: AudioContext, when: number, accent: boolean) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = accent ? 1600 : 1100;
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(accent ? 0.35 : 0.2, when + 0.001);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(when);
+    osc.stop(when + 0.05);
+  }
+
+  /** Scheduler loop: queue clicks ~150 ms ahead against the audio clock so the
+   * click stays sample-accurate even while the tab throttles timers. */
+  function startMetronome() {
+    stopMetronome();
+    const el = audioRef.current;
+    if (!el || !bpm || bpm <= 0) return;
+    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = audioCtxRef.current ?? new Ctx();
+    audioCtxRef.current = ctx;
+    void ctx.resume();
+    const spb = 60 / bpm;
+    metroStateRef.current = { nextBeat: 0, beatIdx: 0 };
+    metroTimerRef.current = window.setInterval(() => {
+      const m = metroRef.current;
+      if (!m.on && m.beats <= 0) return;
+      const now = el.currentTime;
+      let st = metroStateRef.current;
+      if (st.nextBeat < now) {
+        // (re)synchronise to the audio clock — e.g. right after play or a seek.
+        const ci = m.on ? m.beats : 0; // count-in beats before the first "real" click
+        st = { nextBeat: now + ci * spb, beatIdx: -ci };
+        metroStateRef.current = st;
+      }
+      while (st.nextBeat < now + 0.15) {
+        const audible = m.on ? true : st.beatIdx < 0; // count-in still plays with metronome off
+        if (audible && st.nextBeat >= now - 0.02) scheduleClick(ctx, Math.max(st.nextBeat, ctx.currentTime), ((st.beatIdx % 4) + 4) % 4 === 0);
+        st.nextBeat += spb;
+        st.beatIdx += 1;
+      }
+    }, 60);
+  }
+
+  function stopMetronome() {
+    if (metroTimerRef.current !== null) {
+      window.clearInterval(metroTimerRef.current);
+      metroTimerRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    if (playing && (metroOn || countInBeats > 0)) startMetronome();
+    else stopMetronome();
+    return stopMetronome;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, metroOn, countInBeats, bpm]);
 
   /** Timeline clip-drag state (move / resize start / resize end). */
   const tlDrag = useRef<{ mode: 'move' | 'start' | 'end'; idx: number; grabTime: number; orig: Segment } | null>(null);
@@ -1282,6 +1353,21 @@ export function PracticeTab(props: PracticeSharedProps) {
         >
           {loopRegion ? 'loop: on' : 'loop: off'}
         </button>
+        <label className="mini-field" title="Click track synced to the audio clock (requires BPM > 0)">
+          metronome
+          <input type="checkbox" checked={metroOn} onChange={(e) => setMetroOn(e.target.checked)} disabled={bpm <= 0} />
+        </label>
+        <label className="mini-field" title="Beats of click before the first metronome tick while playing">
+          count-in
+          <input
+            type="number"
+            min={0}
+            max={8}
+            value={countInBeats}
+            onChange={(e) => setCountInBeats(Math.min(8, Math.max(0, Number(e.target.value) || 0)))}
+            style={{ width: 52 }}
+          />
+        </label>
       </div>
       {audioName && <div className="muted" style={{ fontSize: 12 }}>{audioName}</div>}
     </section>
