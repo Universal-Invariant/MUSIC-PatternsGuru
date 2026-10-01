@@ -166,7 +166,13 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
   // inside the box. The presenter still clips markers to `scene.window`, and we
   // pass the same window to relation grouping so connectors match what's shown.
   const win = options.fretWindow;
-  const viewInstrument = win ? withFretWindow(instrument, win) : instrument;
+  let viewInstrument = win ? withFretWindow(instrument, win) : instrument;
+  // Keyboard instruments: the generic one-per-pitch-class assignment would show
+  // only a single octave. Box mode instead lights up every key inside the
+  // window (fixed-pitch layout → "box" == visible keyboard range).
+  if (win && instrument.layout().metric === 'semitone') {
+    viewInstrument = withFretWindow(viewInstrument, { colStart: 0, colEnd: instrument.layout().cols - 1 });
+  }
 
   const groups: RelationGroup[] = [];
   if (toggles.connectors) {

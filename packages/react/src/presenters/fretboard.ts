@@ -64,9 +64,13 @@ export function cellCenter(
   col: number,
   geo: FretboardGeometry,
   window: ResolvedWindow,
+  keyboard = false,
 ): { x: number; y: number } {
+  // On a keyboard layout the black-key lane sits *between* white keys, so its
+  // markers are drawn half a column to the right of their semitone column.
+  const laneOffset = keyboard && row === 1 ? 0.5 : 0;
   return {
-    x: geo.padX + (col - window.colStart) * geo.cellW + geo.cellW / 2,
+    x: geo.padX + (col - window.colStart + laneOffset) * geo.cellW + geo.cellW / 2,
     y: geo.padY + (row - window.rowStart) * geo.cellH + geo.cellH / 2,
   };
 }
@@ -316,6 +320,7 @@ function buildConnectors(
   instrument: Instrument,
   geo: FretboardGeometry,
   window: ResolvedWindow,
+  keyboard = false,
 ): RenderConnector[] {
   const byId = new Map(instrument.positions().map((p) => [p.id, p]));
   const out: RenderConnector[] = [];
@@ -326,13 +331,13 @@ function buildConnectors(
       if (!p) continue;
       if (p.row < window.rowStart || p.row > window.rowEnd) continue;
       if (p.col < window.colStart || p.col > window.colEnd) continue;
-      points.push(cellCenter(p.row, p.col, geo, window));
+      points.push(cellCenter(p.row, p.col, geo, window, keyboard));
     }
     if (points.length === 0) continue;
     let anchor: { x: number; y: number } | undefined;
     if (group.anchor) {
       const a = byId.get(group.anchor);
-      if (a) anchor = cellCenter(a.row, a.col, geo, window);
+      if (a) anchor = cellCenter(a.row, a.col, geo, window, keyboard);
     }
     out.push({ group, points, anchor });
   }
@@ -445,7 +450,8 @@ export class FretboardPresenter implements Presenter {
       });
     }
 
-    const connectors = buildConnectors(connectorGroups, instrument, this.geo, window);
+    const keyboard = layout.metric === 'semitone';
+    const connectors = buildConnectors(connectorGroups, instrument, this.geo, window, keyboard);
 
     return {
       instrumentId: instrument.id,
@@ -469,6 +475,8 @@ export class FretboardPresenter implements Presenter {
         orientation: layout.orientation,
         axisRow: layout.axisLabels[0],
         axisCol: layout.axisLabels[1],
+        keyboard,
+        lowMidi: instrument.positions()[0]?.midi ?? '',
       },
     };
   }

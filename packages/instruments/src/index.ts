@@ -6,6 +6,7 @@
  * own via {@link registerInstrument}.
  */
 
+import { createPianoInstrument } from './piano.js';
 import type { Instrument } from '@mpg/core';
 import {
   BASS_TUNING,
@@ -16,6 +17,7 @@ import {
 } from './fretted.js';
 
 export { withFretWindow, type FretWindow } from './fretted.js';
+export { createPianoInstrument, isBlackKey, blackKeyOffset, type PianoOptions } from './piano.js';
 
 export const guitarStandard: Instrument = createFrettedInstrument({
   id: 'guitar-standard',
@@ -50,7 +52,14 @@ export const guitarDropD: Instrument = createFrettedInstrument({
 });
 
 /** Built-in instruments keyed by id — the default plugin set. */
+export const pianoStandard: Instrument = createPianoInstrument({
+  id: 'piano',
+  name: 'Piano (C2–C7)',
+});
+
+/** Built-in instruments keyed by id — the default plugin set. */
 export const INSTRUMENTS: Record<string, Instrument> = {
+  [pianoStandard.id]: pianoStandard,
   [guitarStandard.id]: guitarStandard,
   [bassStandard.id]: bassStandard,
   [mandolinStandard.id]: mandolinStandard,

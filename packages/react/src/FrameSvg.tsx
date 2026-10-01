@@ -35,6 +35,9 @@ interface Hints {
   rowEnd: number;
   colStart: number;
   colEnd: number;
+  /** True when the instrument is a fixed-pitch semitone grid (keyboard view). */
+  keyboard: boolean;
+  lowMidi: number;
 }
 
 function hintsOf(frame: RenderFrame): Hints {
@@ -49,12 +52,15 @@ function hintsOf(frame: RenderFrame): Hints {
     rowEnd: Number(h.rowEnd ?? 5),
     colStart: Number(h.colStart ?? 0),
     colEnd: Number(h.colEnd ?? 12),
+    keyboard: Boolean(h.keyboard ?? false),
+    lowMidi: Number(h.lowMidi ?? NaN),
   };
 }
 
 function centerOf(marker: RenderMarker, h: Hints): { x: number; y: number } {
+  const laneOffset = h.keyboard && marker.position.row === 1 ? 0.5 : 0;
   return {
-    x: h.padX + (marker.position.col - h.colStart) * h.cellW + h.cellW / 2,
+    x: h.padX + (marker.position.col - h.colStart + laneOffset) * h.cellW + h.cellW / 2,
     y: h.padY + (marker.position.row - h.rowStart) * h.cellH + h.cellH / 2,
   };
 }
@@ -349,6 +355,68 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
   );
 }
 
+/**
+ * Piano-style body for fixed-pitch semitone grids: white keys as full-height
+ * rectangles (one per diatonic column), black keys as shorter raised rectangles
+ * straddling the seams between whites. Markers are drawn on top by the caller.
+ */
+/**
+ * Piano-style body for fixed-pitch semitone grids: white keys as full-height
+ * rectangles (one per diatonic column), black keys as shorter raised rectangles
+ * straddling the seams between whites. Markers are drawn on top by the caller.
+ */
+function KeyboardBody({ h }: { h: Hints }) {
+  const WHITE_PCS = [0, 2, 4, 5, 7, 9, 11];
+  // Pitch class of a column depends on where the window starts relative to C.
+  const lowMidi = Number(h.lowMidi ?? NaN);
+  const pcOf = (col: number) => {
+    if (Number.isFinite(lowMidi)) return (((lowMidi + col) % 12) + 12) % 12;
+    return ((col % 12) + 12) % 12;
+  };
+  const boardTop = h.padY;
+  const boardH = 2 * h.cellH;
+  const boardW = (h.colEnd - h.colStart + 1) * h.cellW;
+  const whites: { x: number; key: string }[] = [];
+  const blacks: { x: number; w: number; key: string }[] = [];
+  for (let col = h.colStart; col <= h.colEnd; col++) {
+    const p = pcOf(col);
+    const x = h.padX + (col - h.colStart) * h.cellW;
+    if (WHITE_PCS.includes(p)) {
+      whites.push({ x, key: `w-${col}` });
+    } else {
+      const w = h.cellW * 0.62;
+      blacks.push({ x: x + h.cellW - w / 2, w, key: `b-${col}` });
+    }
+  }
+  const labelY = boardTop + boardH + h.labelH / 2;
+  return (
+    <g>
+      <rect x={h.padX} y={boardTop} width={boardW} height={boardH} fill="#f4f6f9" rx={4} />
+      {whites.map((k) => (
+        <line key={k.key} x1={k.x + h.cellW} y1={boardTop} x2={k.x + h.cellW} y2={boardTop + boardH} stroke="#9aa3af" strokeWidth={1.2} />
+      ))}
+      {blacks.map((k) => (
+        <rect key={k.key} x={k.x} y={boardTop} width={k.w} height={boardH * 0.6} fill="#23282f" rx={2} />
+      ))}
+      <rect x={h.padX} y={boardTop} width={boardW} height={boardH} fill="none" stroke="#5a626c" strokeWidth={1.5} rx={4} />
+      {Array.from({ length: Math.max(0, h.colEnd - h.colStart + 1) }, (_, i) => i + h.colStart)
+        .filter((col) => pcOf(col) === 0)
+        .map((col) => (
+          <text
+            key={`oc-${col}`}
+            x={h.padX + (col - h.colStart) * h.cellW + h.cellW / 2}
+            y={labelY}
+            textAnchor="middle"
+            fontSize={11}
+            fill="#6b7480"
+          >
+            {Number.isFinite(lowMidi) ? `C${Math.floor((lowMidi + col) / 12) - 1}` : 'C'}
+          </text>
+        ))}
+    </g>
+  );
+}
+
 export function FrameSvg({ frame, onMarkerClick, className }: FrameSvgProps) {
   const h = useMemo(() => hintsOf(frame), [frame]);
   const rows = h.rowEnd - h.rowStart + 1;
@@ -431,7 +499,10 @@ export function FrameSvg({ frame, onMarkerClick, className }: FrameSvgProps) {
 
       <rect x={0} y={0} width={frame.width} height={frame.height} fill={frame.palette.canvas} rx={10} />
 
-      {bodyVisible && (
+      {bodyVisible && h.keyboard ? (
+        <KeyboardBody h={h} />
+      ) : null}
+      {bodyVisible && !h.keyboard && (
         <g>
           {/* Strings start at the nut when present (open strip has no wires). */}
           {stringLines.map((s) => (

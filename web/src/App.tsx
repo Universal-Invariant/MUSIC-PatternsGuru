@@ -117,7 +117,15 @@ export function App() {
     });
   }, [overlayList, rootIdx]);
 
-  const windowCols = fretWindow === '0-12' ? 12 : fretWindow === '0-15' ? 15 : 24;
+  const isKeyboard = instrument.layout().metric === 'semitone';
+  /** Keyboard: show ~2 octaves by default (cols are semitones); guitar: chosen fret window. */
+  const windowCols = isKeyboard
+    ? Math.min(instrument.layout().cols - 1, 24)
+    : fretWindow === '0-12'
+      ? 12
+      : fretWindow === '0-15'
+        ? 15
+        : 24;
 
   /** Box-pattern view: clip the board to [boxStart, boxStart + width - 1]. */
   const box = useMemo(() => {
