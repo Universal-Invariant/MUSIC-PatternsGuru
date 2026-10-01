@@ -400,6 +400,12 @@ export function PracticeTab(props: PracticeSharedProps) {
   const [bulkTranspose, setBulkTranspose] = useState(0);
   const [patternLen, setPatternLen] = useState(1);
 
+  /** Undo / redo history stacks (#10). */
+  const undoStack = useRef<Segment[][]>([]);
+  const redoStack = useRef<Segment[][]>([]);
+  const [, setHistTick] = useState(0); // re-render so button disabled states refresh
+  const lastSegsRef = useRef<Segment[]>(segments);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
@@ -416,6 +422,91 @@ export function PracticeTab(props: PracticeSharedProps) {
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     };
   }, []);
+
+  /**
+   * Undo/redo-aware segment setter (#10). All mutation paths go through this:
+   * the previous list is pushed onto the undo stack (coalesced within 700 ms so
+   * typing/dragging doesn't flood history), and the redo stack is cleared.
+   */
+  function commitSegs(updater: Segment[] | ((list: Segment[]) => Segment[])) {
+    const prev = lastSegsRef.current;
+    setSegments((list) => {
+      const next = typeof updater === 'function' ? updater(list) : updater;
+      if (next === list) return list;
+      // Coalesce consecutive edits that only touch the same segment (dragging,
+      // typing in a cell) into one undo step by comparing ids, not timestamps.
+      const sameShape =
+        prev.length === list.length &&
+        prev.every((s, i) => s.id === list[i]!.id);
+      if (!(sameShape && lastCoalesced.current)) undoStack.current.push(prev);
+      lastCoalesced.current = sameShape;
+      if (undoStack.current.length > 200) undoStack.current.shift();
+      redoStack.current = [];
+      lastSegsRef.current = next;
+      setHistTick((t) => t + 1);
+      return next;
+    });
+  }
+  /** True while a run of same-row edits is being coalesced into one undo step. */
+  const lastCoalesced = useRef(false);
+
+  function undo() {
+    const prev = undoStack.current.pop();
+    if (!prev) return;
+    lastCoalesced.current = false;
+    redoStack.current.push(lastSegsRef.current);
+    lastSegsRef.current = prev;
+    setSegments(prev);
+    setSelected(new Set());
+    setHistTick((t) => t + 1);
+  }
+
+  function redo() {
+    const nxt = redoStack.current.pop();
+    if (!nxt) return;
+    lastCoalesced.current = false;
+    undoStack.current.push(lastSegsRef.current);
+    lastSegsRef.current = nxt;
+    setSegments(nxt);
+    setSelected(new Set());
+    setHistTick((t) => t + 1);
+  }
+
+  // Keyboard shortcuts (#14): space = play/pause, arrows nudge selection/time, ctrl+z/y = undo/redo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === ' ') {
+        e.preventDefault();
+        togglePlay();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+        e.preventDefault();
+        redo();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selected.size) {
+          e.preventDefault();
+          removeSelected();
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (segments.length) {
+          e.preventDefault();
+          const dir = e.key === 'ArrowRight' ? 1 : -1;
+          setSelected((sel) => {
+            const cur = sel.size ? Math.max(...Array.from(sel)) : -dir;
+            const i = Math.min(segments.length - 1, Math.max(0, cur + dir));
+            return new Set([i]);
+          });
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, segments, playing]);
 
   /** Autosave progression to localStorage (debounced) — survives reloads (#8). */
   useEffect(() => {
@@ -552,12 +643,13 @@ export function PracticeTab(props: PracticeSharedProps) {
   }
 
   function patch(i: number, up: Partial<Segment>) {
-    setSegments((list) => list.map((s, j) => (j === i ? { ...s, ...up } : s)));
+    commitSegs((list) => list.map((s, j) => (j === i ? { ...s, ...up } : s)));
     setSelected((sel) => (sel.has(i) ? sel : new Set([i])));
   }
 
   function addMarkerAt(time: number) {
-    setSegments((list) => {
+    lastCoalesced.current = false;
+    commitSegs((list) => {
       const src = list.length ? list[list.length - 1] : undefined;
       const seg: Segment = src
         ? { ...src, id: uid(), time, overlays: src.overlays.map((o) => ({ ...o })) }
@@ -568,17 +660,20 @@ export function PracticeTab(props: PracticeSharedProps) {
 
   /** Remove by stable id (never positional) so stale index sets can't delete the wrong row (#6). */
   function removeById(id: string) {
-    setSegments((list) => list.filter((s) => s.id !== id));
+    lastCoalesced.current = false;
+    commitSegs((list) => list.filter((s) => s.id !== id));
   }
 
   function removeSelected() {
+    lastCoalesced.current = false;
     const ids = new Set(segments.filter((_, i) => selected.has(i)).map((s) => s.id));
-    setSegments((list) => list.filter((s) => !ids.has(s.id)));
+    commitSegs((list) => list.filter((s) => !ids.has(s.id)));
     setSelected(new Set());
   }
 
   function duplicateSelected() {
-    setSegments((list) => {
+    lastCoalesced.current = false;
+    commitSegs((list) => {
       const copies = list
         .filter((_, i) => selected.has(i))
         .map((s) => ({ ...s, id: uid(), time: s.time + bulkStep, overlays: s.overlays.map((o) => ({ ...o })) }));
@@ -605,8 +700,9 @@ export function PracticeTab(props: PracticeSharedProps) {
   }
 
   function pasteAfterSelection() {
+    lastCoalesced.current = false;
     if (clip.length === 0) return;
-    setSegments((list) => {
+    commitSegs((list) => {
       const anchor = Math.max(-1, ...Array.from(selected.values()));
       const baseTime = anchor >= 0 ? list[anchor]!.time : 0;
       const inserted: Segment[] = [];
@@ -628,7 +724,8 @@ export function PracticeTab(props: PracticeSharedProps) {
 
   /** Bulk modify: transpose roots and/or re-space times of the selection. */
   function applyBulk() {
-    setSegments((list) => {
+    lastCoalesced.current = false;
+    commitSegs((list) => {
       const sel = Array.from(selected).sort((a, b) => a - b);
       if (sel.length === 0) return list;
       const out = [...list];
@@ -655,7 +752,7 @@ export function PracticeTab(props: PracticeSharedProps) {
   function applyPatternToSelection() {
     const sel = Array.from(selected).sort((a, b) => a - b);
     if (sel.length === 0 || patternLen <= 0) return;
-    setSegments((list) => {
+    commitSegs((list) => {
       const out = [...list];
       const pattern = list.slice(Math.max(0, sel[0]! - patternLen), sel[0]!);
       if (pattern.length === 0) return list;
@@ -675,7 +772,7 @@ export function PracticeTab(props: PracticeSharedProps) {
 
   /** Fill gaps by extending the previous segment (quick "hold until" edits). */
   function snapTimesToGrid() {
-    setSegments((list) =>
+    commitSegs((list) =>
       list.map((s) => ({ ...s, time: Math.round(s.time / (bulkStep || 1)) * (bulkStep || 1) })),
     );
   }
@@ -710,19 +807,20 @@ export function PracticeTab(props: PracticeSharedProps) {
     const t = clampT(timeFromEvent(e));
     const dt = t - d.grabTime;
     if (Math.abs(dt) > 0.02) tlMoved.current = true;
-    setSegments((list) => {
+    commitSegs((list) => {
       const out = [...list];
-      const cur = list[d.idx]!;
+      // All math derives from d.orig (the pre-drag snapshot) so repeated move
+      // events can't compound/drift against the already-updated live row.
       if (d.mode === 'move') {
-        out[d.idx] = { ...cur, time: clampT(d.orig.time + dt) };
+        out[d.idx] = { ...d.orig, time: clampT(d.orig.time + dt) };
       } else if (d.mode === 'start') {
         // Dragging the left edge changes the start; keep the right edge fixed.
-        const fixedEnd = cur.endTime ?? nextStartByIndex.get(d.idx) ?? span;
+        const fixedEnd = d.orig.endTime ?? nextStartByIndex.get(d.idx) ?? span;
         const newStart = Math.min(clampT(t), fixedEnd - 0.05);
-        out[d.idx] = { ...cur, time: Math.max(0, newStart) };
+        out[d.idx] = { ...d.orig, time: Math.max(0, newStart) };
       } else {
         // Right-edge resize sets an explicit end time.
-        out[d.idx] = { ...cur, endTime: Math.max(cur.time + 0.05, clampT(t)) };
+        out[d.idx] = { ...d.orig, endTime: Math.max(d.orig.time + 0.05, clampT(t)) };
       }
       return out;
     });
@@ -744,7 +842,7 @@ export function PracticeTab(props: PracticeSharedProps) {
       // Snap the final position/end to the editor's step grid (#1).
       const step = bulkStep > 0 ? bulkStep : 0;
       if (step > 0) {
-        setSegments((list) => {
+        commitSegs((list) => {
           const cur = list[d.idx];
           if (!cur) return list;
           const snapped = Math.round(cur.time / step) * step;
@@ -792,7 +890,7 @@ export function PracticeTab(props: PracticeSharedProps) {
           alert('Not a valid MPG progression file.');
           return;
         }
-        setSegments(snap.segments);
+        commitSegs(snap.segments);
         setBpm(snap.bpm);
         setLoopRegion(snap.loopRegion);
         setSelected(new Set([0]));
@@ -968,6 +1066,8 @@ export function PracticeTab(props: PracticeSharedProps) {
       <h2>Progression editor ({segments.length} changes)</h2>
         <div className="row prog-toolbar" style={{ flexWrap: 'wrap', gap: 6 }}>
           <button onClick={() => addMarkerAt(currentTime)}>+ marker @ play head</button>
+          <button onClick={undo} disabled={undoStack.current.length === 0} title="Undo (Ctrl+Z)">↶ undo</button>
+          <button onClick={redo} disabled={redoStack.current.length === 0} title="Redo (Ctrl+Y)">↷ redo</button>
           <button onClick={duplicateSelected} disabled={!selected.size}>duplicate</button>
           <button onClick={removeSelected} disabled={!selected.size}>remove selected</button>
           <button onClick={copySelection} disabled={!selected.size}>copy</button>
@@ -1005,7 +1105,8 @@ export function PracticeTab(props: PracticeSharedProps) {
             onClick={() => {
               const n = Number(prompt('Repeat the whole progression N more times?', '1'));
               if (!Number.isFinite(n) || n <= 0) return;
-              setSegments((list) => {
+              lastCoalesced.current = false;
+              commitSegs((list) => {
                 const out = [...list];
                 const maxT = Math.max(...list.map((s) => s.time), 1);
                 for (let r = 0; r < n; r++) {
@@ -1028,7 +1129,7 @@ export function PracticeTab(props: PracticeSharedProps) {
               if (!v) return;
               const parsed = parseSegments(v, bpm);
               if (parsed.length) {
-                setSegments(parsed);
+                commitSegs(parsed);
                 setSelected(new Set(parsed.map((_, i) => i).slice(0, 1)));
               }
             }}
@@ -1046,7 +1147,7 @@ export function PracticeTab(props: PracticeSharedProps) {
               if (!v.trim()) return;
               const parsed = parseChordProse(v, proseSpacing || 2, proseReps || 1);
               if (parsed.length) {
-                setSegments(parsed);
+                commitSegs(parsed);
                 setSelected(new Set([0]));
                 e.target.value = '';
               }
