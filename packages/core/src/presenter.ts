@@ -108,6 +108,8 @@ export interface FunctionShapePalette {
   readonly degrees: Record<string, MarkerShape>;
   /** Duplicate/ghost positions (background dots). */
   readonly ghost: MarkerShape;
+  /** Shape for notes whose degree class isn't listed (default: 'square'). */
+  readonly default?: MarkerShape;
 }
 
 /** Resolve the shape for a degree label / step inside a function shape palette. */
@@ -120,7 +122,18 @@ export function shapeForStep(
     const byDegree = palette.degrees[degreeLabel];
     if (byDegree) return byDegree;
   }
-  return palette.degrees[String(pc(step))] ?? 'square';
+  // No usable degree label (blind/interval notations, or an unknown label):
+  // try absolute pitch-class keys ('0'…'11') that a palette may explicitly
+  // define — but only when the palette is actually keyed by pitch classes, so
+  // numeric degree keys ('1', '5', …) are never mistaken for pcs. Degree keys
+  // are relative to the pattern root; a raw step must not be coerced into one.
+  const key = pc(step);
+  const hasPcKeys = Object.keys(palette.degrees).some((k) => /^\d+$/.test(k) && Number(k) >= 8);
+  if (hasPcKeys) {
+    const byPc = palette.degrees[String(key)];
+    if (byPc) return byPc;
+  }
+  return palette.default ?? 'square';
 }
 
 const ALL_DEGREE_KEYS = ['1', '2', 'b2', '3', 'b3', '4', '#4', '5', 'b5', '6', 'b6', '7', 'b7'];

@@ -18,7 +18,7 @@ import {
   type NotationMode,
   type Pattern,
 } from '@mpg/core';
-import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt } from '@mpg/core/library';
+import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt, type Template } from '@mpg/core/library';
 import { FretboardPresenter, FrameSvg, buildScene } from '@mpg/react';
 
 const presenter = new FretboardPresenter();
@@ -103,7 +103,8 @@ function segmentName(seg: Segment): string {
       parts.push(`${r} ${t.name}`);
     }
   }
-  return parts.join(' · ') || seg.label || '—';
+  const lbl = seg.label ? (parts.length ? ` (${seg.label})` : seg.label) : '';
+  return parts.join(' · ') + lbl || '—';
 }
 
 function fmtTime(sec: number): string {
@@ -136,35 +137,101 @@ function tokenPcFromName(raw: string): number {
 }
 
 /** Seconds from `bar:beat` plus bpm, or plain seconds if the field isn't bar-based. */
-function parseTimeField(field: string, bpm: number): number | null {
-  const barBeat = /^(\d+)(?:[.:](\d+))?$/.exec(field.trim());
+export function parseTimeField(field: string, bpm: number, beatsPerBar = 4): number | null {
+  const f = field.trim();
+  // Only treat fields containing ':' as bar-based; bare integers are seconds.
+  const barBeat = /^(\d+):(\d+)$/.exec(f);
   if (barBeat && bpm > 0) {
-    const bar = Number(barBeat[1]);
-    const beat = Number(barBeat[2] ?? 0);
-    return ((Math.max(1, bar) - 1) + Math.max(0, beat - (barBeat[2] ? 1 : 0))) * (60 / bpm);
+    const bar = Math.max(1, Number(barBeat[1]));
+    const beat = Math.max(1, Number(barBeat[2]));
+    return ((bar - 1) * beatsPerBar + (beat - 1)) * (60 / bpm);
   }
-  const n = Number(field.replace(/,/g, ''));
+  const n = Number(f.replace(/,/g, ''));
   return Number.isFinite(n) ? n : null;
 }
 
-function matchTemplate(tail: string): { scaleId: string | null; chordId: string | null } {
+interface TemplateMatch {
+  scaleId: string | null;
+  chordId: string | null;
+  /** True when the tail actually named a known scale/chord (not free text). */
+  matched: boolean;
+}
+
+export function matchTemplate(tail: string): TemplateMatch {
   const t = tail.trim().toLowerCase();
-  if (!t) return { scaleId: null, chordId: null };
+  if (!t) return { scaleId: null, chordId: null, matched: false };
   const st =
     SCALE_TEMPLATES.find((x) => x.id === t || x.name.toLowerCase() === t) ??
-    SCALE_TEMPLATES.find((x) => t.startsWith(x.name.toLowerCase()) || t === x.id);
+    SCALE_TEMPLATES.find(
+      (x) => x.name.toLowerCase() !== t && t.startsWith(`${x.name.toLowerCase()} `),
+    );
   const ct =
     CHORD_TEMPLATES.find((x) => x.id === t || x.name.toLowerCase() === t) ??
-    CHORD_TEMPLATES.find((x) => t.startsWith(x.name.toLowerCase()) || t === x.id);
-  if (st && !ct) return { scaleId: st.id, chordId: null };
-  if (ct && !st) return { scaleId: null, chordId: ct.id };
-  if (st && ct) {
-    // Exact-id wins over prefix matches; otherwise prefer whichever matched exactly.
-    const stExact = st.id === t || st.name.toLowerCase() === t;
-    const ctExact = ct.id === t || ct.name.toLowerCase() === t;
-    return ctExact && !stExact ? { scaleId: null, chordId: ct.id } : { scaleId: st.id, chordId: null };
+    // Prefer the longest matching chord name: "minor seventh" must win over
+    // "minor" so symbols like Am7 don't collapse to a minor triad.
+    [...CHORD_TEMPLATES]
+      .filter((x) => x.name.toLowerCase() !== t && t.startsWith(`${x.name.toLowerCase()} `))
+      .sort((a, b) => b.name.length - a.name.length)[0];
+  // When the whole tail names both a scale and a chord ("D dorian minor seventh"),
+  // keep both so ∩ intersection semantics survive round-trips.
+  if (st && ct) return { scaleId: st.id, chordId: ct.id, matched: true };
+  if (st && !ct) return { scaleId: st.id, chordId: null, matched: true };
+  if (ct && !st) return { scaleId: null, chordId: ct.id, matched: true };
+  return { scaleId: null, chordId: null, matched: false };
+}
+
+/**
+ * Interpret a suffix after a root note inside an event description. Handles
+ * shorthand chord symbols (m7, maj7, dom7, dim, sus4, aug …) as well as full
+ * template names ("minor seventh"). Returns null when nothing matches.
+ */
+function matchChordSymbol(suffix: string): { chordId: string; qualityOffset: number } | null {
+  const s = suffix.trim().toLowerCase();
+  if (!s) return null;
+  // Shorthand symbol grammar → real template ids from the core library.
+  const table: Array<[RegExp, string]> = [
+    [/^maj(7|or)?$/, 'maj7'],
+    [/^(dom7|dominant7?)$/, 'dom7'],
+    [/^(min7|m7)$/, 'min7'],
+    [/^min(or)?$/, 'min'],
+    [/^m$/, 'min'],
+    [/^ø7?|^m7b5$/, 'm7b5'],
+    [/^dim7$/, 'dim7'],
+    [/^dim(7)?$|^o$/, 'dim'],
+    [/^(aug|\+)$/, 'aug'],
+    [/^sus4$/, 'sus4'],
+    [/^sus2$/, 'sus2'],
+    [/^7sus4$/, '7sus4'],
+    [/^7$/, 'dom7'],
+    [/^m6$/, 'm6'],
+    [/^6$/, 'maj'], // plain "6" → major triad family fallback
+    [/^9$/, 'dom9'],
+    [/^maj9$/, 'maj9'],
+    [/^(min9|m9)$/, 'min9'],
+    [/^add9$/, 'add9'],
+    [/^(madd9|m\(add9\))$/, 'madd9'],
+    [/^5$/, 'power'],
+  ];
+  for (const [re, id] of table) {
+    if (re.test(s) && CHORD_TEMPLATES.some((x) => x.id === id)) return { chordId: id, qualityOffset: 0 };
   }
-  return { scaleId: null, chordId: null };
+  // Full template name/id/alias last ("Minor Seventh", "dom7", …).
+  const named = CHORD_TEMPLATES.find(
+    (x) => x.id === s || x.name.toLowerCase() === s || x.aliases.includes(s),
+  );
+  if (named) return { chordId: named.id, qualityOffset: 0 };
+  return null;
+}
+
+/** Chord root offset (from scale root) implied by a template's third degree. */
+export function defaultChordOffset(t: Template): number {
+  for (const d of t.degrees) {
+    const label = Array.isArray(d) ? d[1] : d;
+    const semis = Array.isArray(d) ? d[0] : undefined;
+    if (label === '3') return pc(semis ?? 4);
+    if (label === 'b3') return pc(semis ?? 3);
+  }
+  return 0;
 }
 
 /**
@@ -192,20 +259,37 @@ function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
       events.push({ time: 0, root, scaleId: 'dorian', chordId: null, chordOffset: 0 });
       continue;
     }
+    // 1) Shorthand chord symbol glued to the root: "m7", "maj7", "dim", …
+    const sym = matchChordSymbol(rest);
+    if (sym) {
+      events.push({
+        time: 0,
+        root,
+        scaleId: null,
+        chordId: sym.chordId,
+        chordOffset: sym.qualityOffset,
+      });
+      continue;
+    }
     // Split trailing tokens: greedy longest template match per space-separated word group.
     const words = rest.split(/\s+/);
     let matched = matchTemplate(words.join(' '));
     let consumed = words.length;
-    if (!matched.scaleId && !matched.chordId) {
-      for (let k = words.length; k >= 1; k--) {
+    if (!matched.matched) {
+      for (let k = words.length - 1; k >= 1; k--) {
         matched = matchTemplate(words.slice(0, k).join(' '));
-        if (matched.scaleId || matched.chordId) {
+        if (matched.matched) {
           consumed = k;
           break;
         }
       }
     }
-    if (!matched.scaleId && !matched.chordId) matched = { scaleId: 'dorian', chordId: null };
+    // #2: if nothing matched a known template, keep ALL the words as the
+    // display label and leave scale/chord unset — no silent dorian fallback.
+    if (!matched.matched) {
+      matched = { scaleId: null, chordId: null, matched: false };
+      consumed = 0; // all words stay in the label
+    }
     events.push({
       time: 0,
       root,
@@ -219,7 +303,7 @@ function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
 }
 
 /** Parse a pasted block into segments. Tolerant: bad lines are skipped. */
-function parseSegments(text: string, bpm = 0): Segment[] {
+export function parseSegments(text: string, bpm = 0): Segment[] {
   const out: Segment[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -258,7 +342,7 @@ function parseSegments(text: string, bpm = 0): Segment[] {
  *
  *   Gmaj7
  */
-function parseChordProse(text: string, spacing: number, reps: number): Segment[] {
+export function parseChordProse(text: string, spacing: number, reps: number): Segment[] {
   const blocks: ParsedEvent[][] = [[]];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -276,11 +360,12 @@ function parseChordProse(text: string, spacing: number, reps: number): Segment[]
         out.push({
           id: uid(),
           time: t,
-          scaleId: e.scaleId ?? 'major',
+          scaleId: e.scaleId,
           root: e.root,
           chordId: e.chordId,
           chordOffset: 0,
           overlays: [],
+          label: e.label,
         });
         t += spacing;
       }
@@ -289,7 +374,7 @@ function parseChordProse(text: string, spacing: number, reps: number): Segment[]
   return out;
 }
 
-function serializeSegments(segs: readonly Segment[]): string {
+export function serializeSegments(segs: readonly Segment[]): string {
   return segs.map((s) => `${s.time.toFixed(2)}\t${segmentName(s)}`).join('\n');
 }
 
@@ -303,7 +388,7 @@ interface PracticeSnapshot {
   loopRegion: { start: number; end: number } | null;
 }
 
-function sanitizeSegment(raw: unknown): Segment | null {
+export function sanitizeSegment(raw: unknown): Segment | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   const time = Number(r.time);
@@ -325,16 +410,19 @@ function sanitizeSegment(raw: unknown): Segment | null {
         .filter((o): o is OverlaySpec => o !== null)
     : [];
   const endTime = Number(r.endTime);
+  // #2: free-text labels survive sanitization; unknown template ids are
+  // dropped to null so the UI can flag them instead of rendering nothing.
+  const labelOk = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : undefined;
   return {
     id: typeof r.id === 'string' ? r.id : uid(),
     time,
     ...(Number.isFinite(endTime) && endTime > time ? { endTime } : {}),
-    scaleId: scaleId && SCALE_TEMPLATES.some((t) => t.id === scaleId) ? scaleId : scaleId,
+    scaleId: scaleId && SCALE_TEMPLATES.some((t) => t.id === scaleId) ? scaleId : null,
     root,
-    chordId: chordId && CHORD_TEMPLATES.some((t) => t.id === chordId) ? chordId : chordId,
+    chordId: chordId && CHORD_TEMPLATES.some((t) => t.id === chordId) ? chordId : null,
     chordOffset: Number.isFinite(Number(r.chordOffset)) ? Number(r.chordOffset) : 0,
     overlays,
-    ...(typeof r.label === 'string' && r.label ? { label: r.label } : {}),
+    ...(labelOk ? { label: labelOk } : {}),
   };
 }
 
@@ -1207,8 +1295,13 @@ export function PracticeTab(props: PracticeSharedProps) {
                     </select>
                   </td>
                   <td>
-                    <select value={s.scaleId ?? ''} onChange={(e) => patch(i, { scaleId: e.target.value || null })}>
-                      <option value="">none</option>
+                    <select
+                      value={s.scaleId ?? ''}
+                      className={s.scaleId == null && s.label ? 'no-match' : undefined}
+                      title={s.scaleId == null && s.label ? `free text: "${s.label}" (no matching template)` : undefined}
+                      onChange={(e) => patch(i, { scaleId: e.target.value || null })}
+                    >
+                      <option value="">{s.label ? `— ${s.label} —` : 'none'}</option>
                       {SCALE_TEMPLATES.map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
                       ))}
