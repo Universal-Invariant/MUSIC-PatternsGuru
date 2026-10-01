@@ -66,6 +66,12 @@ export interface MarkerContent {
   readonly degree?: string;
   /** Letter spelling when meaningful, else undefined. */
   readonly spelling?: Spelling;
+  /**
+   * Optional halo/outline colour for the label text. Renderers draw a thick
+   * stroke of this colour around glyphs (paint-order: stroke) so labels stay
+   * legible on any background — replaces the old opaque plate underlay.
+   */
+  readonly halo?: string;
 }
 
 /** A palette maps a semantic role onto colours. Swap palettes freely. */
@@ -238,6 +244,7 @@ export function markerForPatternMember(
         isRoot,
         degree,
         spelling,
+        halo: '#f5f7fa',
       };
     case 'letter':
       return {
@@ -247,6 +254,7 @@ export function markerForPatternMember(
         isRoot,
         degree,
         spelling,
+        halo: '#f5f7fa',
       };
   }
 }

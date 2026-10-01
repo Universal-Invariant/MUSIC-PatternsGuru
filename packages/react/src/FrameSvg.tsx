@@ -289,6 +289,10 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
   const c = m.content;
   const alpha = m.alpha ?? 1;
   const glowing = m.effect && m.effect.kind === 'glow';
+  // Halo colour: the canvas (background) colour makes the stroke "cut out" of
+  // whatever sits behind the text — wood, blobs, ghosts — so labels stay
+  // legible on any background without an opaque plate.
+  const haloColor = m.content.halo ?? '#f5f7fa';
   const shapePath = shapePathFor(m.shape ?? 'disc', x, y, r);
   return (
     <g
@@ -306,32 +310,24 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
       ) : (
         <circle cx={x} cy={y} r={r} fill={c.fill} stroke={c.stroke} strokeWidth={c.isRoot ? 2.5 : 1} />
       )}
+      {/* Labels sit directly on the marker with a thick contrasting halo
+          (paint-order stroke) instead of an opaque plate — readable against
+          any background: wood, connector blobs, ghost dots, or glow. */}
       {c.text && (
-        <>
-          {/* Opaque plate behind the letter/number so labels never bleed into
-              the fretboard wood or connector blobs (request #3). */}
-          <rect
-            x={x - r * 0.72}
-            y={y - r * 0.78}
-            width={r * 1.44}
-            height={r * (c.sub ? 1.62 : 1.24)}
-            rx={r * 0.28}
-            fill="#f5f7fa"
-            opacity={0.92}
-            style={{ pointerEvents: 'none' }}
-          />
-          <text
-            x={x}
-            y={c.sub ? y - 1 : y + 4}
-            textAnchor="middle"
-            fontSize={r * 1.05}
-            fontWeight={c.isRoot ? 800 : 600}
-            fill={c.isRoot ? '#1a1400' : '#0c0f12'}
-            style={{ pointerEvents: 'none', userSelect: 'none' }}
-          >
-            {c.text}
-          </text>
-        </>
+        <text
+          x={x}
+          y={c.sub ? y - 1 : y + 4}
+          textAnchor="middle"
+          fontSize={r * 1.05}
+          fontWeight={c.isRoot ? 800 : 600}
+          fill={c.isRoot ? '#1a1400' : '#0c0f12'}
+          stroke={haloColor}
+          strokeWidth={Math.max(1.5, r * 0.3)}
+          strokeLinejoin="round"
+          style={{ paintOrder: 'stroke', pointerEvents: 'none', userSelect: 'none' }}
+        >
+          {c.text}
+        </text>
       )}
       {c.sub && (
         <text
@@ -340,8 +336,11 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
           textAnchor="middle"
           fontSize={r * 0.55}
           fill="#0c0f12"
-          opacity={0.85}
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
+          opacity={0.9}
+          stroke={haloColor}
+          strokeWidth={Math.max(1, r * 0.18)}
+          strokeLinejoin="round"
+          style={{ paintOrder: 'stroke', pointerEvents: 'none', userSelect: 'none' }}
         >
           {c.sub}
         </text>

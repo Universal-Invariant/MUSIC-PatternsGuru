@@ -17,7 +17,9 @@ import {
   overlapGroups,
   mergeGroups,
   transpose,
+  FUNCTION_SHAPE_PALETTES,
   type Effect,
+  type FunctionShapePalette,
   type Instrument,
   type NotationMode,
   type Palette,
@@ -73,6 +75,16 @@ export interface BuildSceneOptions {
   markerScale?: number;
   /** Marker shape palette (UI dropdown). Undefined = discs. */
   shapes?: ShapePalette;
+  /**
+   * Function-based shape palette: one shape per tonal degree class, analogous
+   * to the colour palettes (e.g. circles for chord tones, squares for the
+   * rest). Takes precedence over {@link shapes}. Custom objects (the future
+   * palette editor's output) may be passed directly; built-ins are looked up
+   * by {@link functionShapeId} from core's FUNCTION_SHAPE_PALETTES.
+   */
+  functionShapes?: FunctionShapePalette;
+  /** Built-in function-shape palette id (see FUNCTION_SHAPE_PALETTES in core). */
+  functionShapeId?: string;
   /** Per-pattern opacity/emphasis for the base patterns (overlay alpha is fixed). */
   emphasis?: readonly number[];
   rootEffect?: Effect;
@@ -174,6 +186,11 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     includeAllCandidates: options.includeAllCandidates ?? false,
     markerScale: options.markerScale ?? 1,
     shapes: options.shapes,
+    functionShapes:
+      options.functionShapes ??
+      (options.functionShapeId
+        ? FUNCTION_SHAPE_PALETTES.find((p) => p.id === options.functionShapeId)
+        : undefined),
   };
 }
 

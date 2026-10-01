@@ -333,3 +333,152 @@ footer.statusbar {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* ---- Tabs (Playground / Practice) ---------------------------------------- */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.tab.on {
+  color: inherit;
+  border-bottom-color: #ff5d8f;
+}
+
+/* ---- Practice tab --------------------------------------------------------- */
+.practice {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+  width: 100%;
+}
+.practice-layout { padding: 0; }
+
+.timeline {
+  position: relative;
+  height: 46px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: crosshair;
+  touch-action: none;
+  overflow: hidden;
+}
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ff5d8f;
+  pointer-events: none;
+}
+.timeline-loop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(77, 208, 225, 0.15);
+  border-left: 1px dashed #4dd0e1;
+  border-right: 1px dashed #4dd0e1;
+  pointer-events: none;
+}
+.timeline-marker {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 10px;
+  margin-left: -5px;
+  border-radius: 3px;
+  background: #4dd0e1;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.timeline-marker.active { background: #aed581; }
+.timeline-marker-label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, 1px);
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.prog-toolbar button, .prog-toolbar .mini-field {
+  font-size: 12px;
+}
+.mini-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+.mini-field input {
+  width: 56px;
+}
+.prog-io {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px;
+  resize: vertical;
+}
+.prog-grid-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+table.prog-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.prog-grid th, .prog-grid td {
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  white-space: nowrap;
+}
+.prog-grid thead th {
+  position: sticky;
+  top: 0;
+  background: #232a33;
+  z-index: 1;
+}
+.prog-grid tbody tr { cursor: row; }
+.prog-grid tbody tr.is-sel { background: rgba(255, 93, 143, 0.14); }
+.prog-grid tbody tr.is-active { outline: 1px solid #aed581; }
+.prog-grid select, .prog-grid input[type='number'] {
+  font-size: 12px;
+  padding: 2px 4px;
+  max-width: 140px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+}

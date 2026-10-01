@@ -42,3 +42,4 @@ export * from './instrument.js';
 export * from './presenter.js';
 export * from './relations.js';
 export * from './library/index.js';
+export { rootLabel, DEFAULT_ROOT_SPELLINGS } from './library/template.js';

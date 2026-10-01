@@ -16,6 +16,7 @@
  */
 
 import type { Instrument, Position } from './instrument.js';
+import { pc } from './pitch-class.js';
 import type { Pattern } from './pattern.js';
 import type { MarkerContent, NotationMode, Palette } from './notation.js';
 
@@ -92,6 +93,135 @@ export const MARKER_SHAPES: readonly MarkerShape[] = [
   'square',
 ] as const;
 
+/**
+ * Function-based shape assignment: instead of one uniform shape for every note,
+ * shapes vary by tonal function — e.g. discs/circles for chord tones (1, 3, 5)
+ * and squares for everything else. Keyed exactly like {@link Palette.degrees}
+ * colour palettes: look up by canonical degree label (`b3`, `#4`…), falling
+ * back to the semitone string (`0`…`11`), then disc. This same data model is
+ * what the future customizable palette editor will read/write.
+ */
+export interface FunctionShapePalette {
+  readonly id: string;
+  readonly name: string;
+  /** Degree-class → shape. */
+  readonly degrees: Record<string, MarkerShape>;
+  /** Duplicate/ghost positions (background dots). */
+  readonly ghost: MarkerShape;
+}
+
+/** Resolve the shape for a degree label / step inside a function shape palette. */
+export function shapeForStep(
+  palette: FunctionShapePalette,
+  degreeLabel: string | undefined,
+  step: number,
+): MarkerShape {
+  if (degreeLabel) {
+    const byDegree = palette.degrees[degreeLabel];
+    if (byDegree) return byDegree;
+  }
+  return palette.degrees[String(pc(step))] ?? 'square';
+}
+
+const ALL_DEGREE_KEYS = ['1', '2', 'b2', '3', 'b3', '4', '#4', '5', 'b5', '6', 'b6', '7', 'b7'];
+
+function uniformShapes(shape: MarkerShape): Record<string, MarkerShape> {
+  return Object.fromEntries(ALL_DEGREE_KEYS.map((d) => [d, shape]));
+}
+
+/** Built-in function-based shape palettes (the "shape palette" UI dropdown). */
+export const FUNCTION_SHAPE_PALETTES: readonly FunctionShapePalette[] = [
+  {
+    id: 'uniform-disc',
+    name: 'Uniform discs',
+    degrees: uniformShapes('disc'),
+    ghost: 'disc',
+  },
+  {
+    id: 'chord-circle-rest-square',
+    name: 'Chord tones = circles, rest = squares',
+    // Classic triad members (1 3 b3 5 b5) stay round; tensions and altered
+    // tones become squares so the eye separates "home" notes from "colour"
+    // notes without reading any text.
+    degrees: {
+      '1': 'disc',
+      '3': 'disc',
+      'b3': 'disc',
+      '5': 'disc',
+      'b5': 'disc',
+      '2': 'square',
+      'b2': 'square',
+      '4': 'square',
+      '#4': 'square',
+      '6': 'square',
+      'b6': 'square',
+      '7': 'square',
+      'b7': 'square',
+    },
+    ghost: 'square',
+  },
+  {
+    id: 'triad-hex-tension',
+    name: 'Triad = discs, tensions = hexagons',
+    degrees: {
+      '1': 'disc',
+      '3': 'disc',
+      'b3': 'disc',
+      '5': 'disc',
+      'b5': 'disc',
+      '2': 'hexagon',
+      'b2': 'hexagon',
+      '4': 'hexagon',
+      '#4': 'hexagon',
+      '6': 'hexagon',
+      'b6': 'hexagon',
+      '7': 'hexagon',
+      'b7': 'hexagon',
+    },
+    ghost: 'disc',
+  },
+  {
+    id: 'stability-star',
+    name: 'Stable = discs, altered = stars',
+    degrees: {
+      '1': 'disc',
+      '2': 'disc',
+      '3': 'disc',
+      '4': 'disc',
+      '5': 'disc',
+      '6': 'disc',
+      '7': 'disc',
+      'b2': 'star',
+      'b3': 'star',
+      '#4': 'star',
+      'b5': 'star',
+      'b6': 'star',
+      'b7': 'star',
+    },
+    ghost: 'disc',
+  },
+  {
+    id: 'per-degree',
+    name: 'Distinct shape per degree',
+    degrees: {
+      '1': 'disc',
+      '2': 'hexagon',
+      'b2': 'octagon',
+      '3': 'diamond',
+      'b3': 'square',
+      '4': 'star',
+      '#4': 'cloud',
+      '5': 'disc',
+      'b5': 'octagon',
+      '6': 'hexagon',
+      'b6': 'square',
+      '7': 'diamond',
+      'b7': 'cloud',
+    },
+    ghost: 'disc',
+  },
+];
+
 /** A resolved connector ready for drawing. */
 export interface RenderConnector {
   readonly group: RelationGroup;
@@ -151,6 +281,12 @@ export interface VisualizationScene {
   readonly markerScale?: number;
   /** Marker geometry palette: one shape per role. Undefined = all discs. */
   readonly shapes?: ShapePalette;
+  /**
+   * Function-based marker geometry: shape varies by tonal degree class (like a
+   * colour palette). Takes precedence over {@link shapes} when present. This is
+   * the data model the future customizable palette editor will read/write.
+   */
+  readonly functionShapes?: FunctionShapePalette;
 }
 
 /** Which shape each marker role gets. Mirrors the colour palettes. */

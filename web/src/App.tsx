@@ -12,12 +12,13 @@
 import { useMemo, useState } from 'react';
 import {
   PALETTES,
-  SHAPE_PALETTES,
+  FUNCTION_SHAPE_PALETTES,
   NOTATION_MODES,
   pcAdd,
   type NotationMode,
   type Pattern,
 } from '@mpg/core';
+import { PracticeTab } from './PracticeTab.js';
 import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt, parsePatternQuery } from '@mpg/core/library';
 import { INSTRUMENTS, listInstruments } from '@mpg/instruments';
 import { FretboardPresenter, FrameSvg, buildScene } from '@mpg/react';
@@ -52,7 +53,9 @@ export function App() {
   const [mode, setMode] = useState<NotationMode>('tonal');
   const [markerScale, setMarkerScale] = useState(1);
   const [paletteId, setPaletteId] = useState('tonal-default');
-  const [shapeId, setShapeId] = useState('discs');
+  const [tab, setTab] = useState<'playground' | 'practice'>('playground');
+  /** Function-based shape palette id (circles for chord tones, squares for the rest…). */
+  const [functionShapeId, setFunctionShapeId] = useState('uniform-disc');
   const [fretWindow, setFretWindow] = useState<'0-12' | '0-15' | '0-24'>('0-12');
   const [showChordsInScale, setShowChordsInScale] = useState(false);
   const [chordSize, setChordSize] = useState<3 | 4>(4);
@@ -102,7 +105,6 @@ export function App() {
   }, [overlayList, rootIdx]);
 
   const windowCols = fretWindow === '0-12' ? 12 : fretWindow === '0-15' ? 15 : 24;
-  const shapes = SHAPE_PALETTES.find((s) => s.id === shapeId)?.palette;
 
   const scene = useMemo(() => {
     const patterns = searched ? [...selection.patterns, searched] : selection.patterns;
@@ -111,7 +113,7 @@ export function App() {
       mode,
       markerScale,
       palette,
-      shapes,
+      functionShapeId,
       window: { colStart: 0, colEnd: windowCols },
       toggles: { connectors, labels: true, background, effects: effectsOn },
       showChordsInScale,
@@ -126,7 +128,7 @@ export function App() {
     searched,
     mode,
     palette,
-    shapes,
+    functionShapeId,
     markerScale,
     windowCols,
     connectors,
@@ -162,6 +164,40 @@ export function App() {
         </span>
       </header>
 
+      <nav className="tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === 'playground'}
+          className={tab === 'playground' ? 'tab on' : 'tab'}
+          onClick={() => setTab('playground')}
+        >
+          Playground
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === 'practice'}
+          className={tab === 'practice' ? 'tab on' : 'tab'}
+          onClick={() => setTab('practice')}
+        >
+          Practice · Progression
+        </button>
+      </nav>
+
+      {tab === 'practice' ? (
+        <div className="layout practice-layout">
+          <PracticeTab
+            instrument={instrument}
+            mode={mode}
+            paletteId={paletteId}
+            functionShapeId={functionShapeId}
+            markerScale={markerScale}
+            connectors={connectors}
+            background={background}
+            effectsOn={effectsOn}
+            windowCols={windowCols}
+          />
+        </div>
+      ) : (
       <div className="layout">
         <aside className="controls">
           <section className="panel">
@@ -382,9 +418,9 @@ export function App() {
                 </select>
               </label>
               <label className="field">
-                Note shape
-                <select value={shapeId} onChange={(e) => setShapeId(e.target.value)}>
-                  {SHAPE_PALETTES.map((s) => (
+                Note shape (by function)
+                <select value={functionShapeId} onChange={(e) => setFunctionShapeId(e.target.value)}>
+                  {FUNCTION_SHAPE_PALETTES.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
                     </option>
@@ -513,6 +549,7 @@ export function App() {
           )}
         </main>
       </div>
+      )}
 
       <footer className="statusbar">
         <span>{frame.markers.length} markers</span>

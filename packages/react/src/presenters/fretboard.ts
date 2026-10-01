@@ -16,8 +16,10 @@ import {
   pcSub,
   patternPcs,
   rootLabel,
+  shapeForStep,
   type Instrument,
   type MarkerContent,
+  type MarkerShape,
   type NotationMode,
   type Palette,
   type Pattern,
@@ -85,6 +87,8 @@ interface Assignment {
   readonly groups: string[];
   readonly alpha: number;
   readonly scale: number;
+  /** Semitone step above the owning pattern's root (drives function shapes). */
+  readonly step: number;
 }
 
 /**
@@ -167,6 +171,7 @@ function assignMarkers(
         groups: [`pattern:${pattern.id}`],
         alpha: weight,
         scale: content.isRoot ? 1.15 : 1,
+        step: pc(step),
       });
     }
 
@@ -276,6 +281,22 @@ function layerVisible(layers: readonly RenderLayer[], id: string): boolean {
   return l ? l.visible : true;
 }
 
+/**
+ * Resolve the geometry of one pattern marker. Function-based palettes win over
+ * legacy role palettes: shape is looked up by tonal degree class (the same key
+ * space the colour palettes use), so chord tones vs tensions read at a glance.
+ */
+function resolveMarkerShape(scene: VisualizationScene, a: Assignment): MarkerShape | undefined {
+  if (scene.functionShapes) {
+    if (a.content.isRoot && scene.functionShapes.degrees['1'] === undefined) {
+      return 'disc';
+    }
+    return shapeForStep(scene.functionShapes, a.content.degree ?? '', a.step);
+  }
+  if (scene.shapes) return a.content.isRoot ? scene.shapes.root : scene.shapes.member;
+  return undefined;
+}
+
 export class FretboardPresenter implements Presenter {
   readonly id = 'fretboard';
   readonly name = 'Fretboard Presenter';
@@ -323,7 +344,7 @@ export class FretboardPresenter implements Presenter {
           groups: [],
           alpha: 0.35,
           scale: 0.45,
-          shape: scene.shapes?.ghost,
+          shape: scene.functionShapes?.ghost ?? scene.shapes?.ghost,
         });
       }
     }
@@ -355,7 +376,7 @@ export class FretboardPresenter implements Presenter {
         effect,
         alpha: outsideWindow ? Math.min(a.alpha, 0.28) : a.alpha,
         scale: a.scale * markerScale,
-        shape: scene.shapes ? (a.content.isRoot ? scene.shapes.root : scene.shapes.member) : undefined,
+        shape: resolveMarkerShape(scene, a),
       });
     }
 
