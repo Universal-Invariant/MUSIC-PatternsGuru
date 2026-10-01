@@ -712,7 +712,9 @@ export function PracticeTab(props: PracticeSharedProps) {
       palette: PALETTES.find((p) => p.id === props.paletteId) ?? PALETTES[0]!,
       functionShapeId: props.functionShapeId,
       markerScale: props.markerScale,
-      window: props.fretWindow ?? { colStart: 0, colEnd: props.windowCols },
+      // The fretboard itself always shows the full display range (never cropped
+      // by the box); `fretWindow` only clips which *notes* are drawn.
+      window: { colStart: 0, colEnd: props.windowCols },
       fretWindow: props.fretWindow,
       toggles: { connectors: props.connectors, labels: true, background: props.background, effects: props.effectsOn },
       showOverlap: patterns.length >= 2,
@@ -743,14 +745,27 @@ export function PracticeTab(props: PracticeSharedProps) {
   /** Seconds per CSS pixel at the current zoom (the inverse of px-per-second). */
   const secPerPx = span / (visibleSpan() * zoom);
 
-  /** Map a pointer event to track time. Uses the *content* rect (which spans
-   * `span` seconds and scrolls horizontally when zoomed), so it is correct at
-   * any zoom level without knowing scroll offsets. */
+  /** Map a pointer event to track time. Uses the *visible* (scroll container)
+   * rect plus the current scrollLeft — the content rect alone would be wrong
+   * while zoomed because its left edge can be scrolled off-screen. */
   function timeFromEvent(e: { clientX: number }): number {
-    const rect = barRef.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return 0;
+    const host = fitSpanRef.current ?? barRef.current;
+    if (!host) return 0;
+    const rect = host.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    // The scroll container's `scrollWidth` equals the full zoomed content
+    // width in CSS pixels, so px-per-second is exact at any zoom level:
+    // fraction across the visible viewport × visible seconds + scrolled-past
+    // seconds (derived from scrollLeft measured against the same widths).
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    return frac * span;
+    const visibleSeconds = span / zoom;
+    const scrolledRatio = host.scrollWidth > 0 ? host.scrollLeft / host.scrollWidth : 0;
+    const scrolledSeconds = scrolledRatio * span;
+    return clampSpan(frac * visibleSeconds + scrolledSeconds);
+  }
+
+  function clampSpan(t: number): number {
+    return Math.min(span, Math.max(0, t));
   }
 
   /** Keep the playhead in view while playing/seeking when zoomed in. */

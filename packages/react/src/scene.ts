@@ -214,9 +214,11 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     ...overlays.map(() => 0.82),
   ];
 
-  // Box-pattern view is exclusive: when a fret window is active, pattern
-  // markers show every in-window occurrence on every string (the classic CAGED
-  // "position" picture) — never the fretboard-wide one-per-pitch-class set.
+  // Box-pattern view is *exclusive for markers*: inside the fret window every
+  // occurrence on every string is shown (the classic CAGED "position" picture).
+  // It must NOT crop the fretboard itself — the full neck stays visible so the
+  // box reads in context. So we keep the caller's scroll/viewport window (or
+  // the whole neck by default) and only pass `fretWindow` for marker clipping.
   const includeAll = win ? false : (options.includeAllCandidates ?? false);
 
   return {
@@ -230,7 +232,7 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     effects: toggles.effects
       ? { root: options.rootEffect ?? EFFECT_ROOT_GLOW, member: EFFECT_NONE, outside: EFFECT_NONE }
       : undefined,
-    window: win ?? options.window,
+    window: options.window,
     fretWindow: win,
     showBackground: toggles.background,
     includeAllCandidates: includeAll,

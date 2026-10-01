@@ -128,7 +128,7 @@ export function App() {
       markerScale,
       palette,
       functionShapeId,
-      window: box ?? { colStart: 0, colEnd: windowCols },
+      window: { colStart: 0, colEnd: windowCols },
       fretWindow: box,
       toggles: { connectors, labels: true, background, effects: effectsOn },
       showChordsInScale,
@@ -211,6 +211,7 @@ export function App() {
             background={background}
             effectsOn={effectsOn}
             windowCols={windowCols}
+            fretWindow={box}
           />
         </div>
       ) : (

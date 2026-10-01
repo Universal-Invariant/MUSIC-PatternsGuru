@@ -196,8 +196,45 @@ function assignMarkers(
           inBox.push({ pos: cand.position, step });
         }
       }
-      inBox.sort((a, b) => (a.pos.midi ?? 0) - (b.pos.midi ?? 0) || a.pos.row - b.pos.row);
-      for (const p of inBox) place(p.pos, p.step);
+      // Anchor: the lowest occurrence of the pattern root inside the box (the
+      // note a player reads the shape from). It must always be placed as the
+      // root marker, even when it shares a fret with another degree.
+      let anchorPos: Position | undefined;
+      for (const cand of instrument.pitchClassToPositions(pc(pattern.root))) {
+        const col = cand.position.col;
+        if (col < fretWindow.colStart || col > fretWindow.colEnd) continue;
+        const midi = cand.position.midi ?? 0;
+        if (!anchorPos || midi < (anchorPos.midi ?? 0)) anchorPos = cand.position;
+      }
+      // One marker per fret/string cell. Within a cell, priority is:
+      //   pattern root > earlier pattern's root > lower sounding MIDI.
+      // This keeps shared frets (e.g. B and E on the two high strings, which
+      // sit at the same fret everywhere) from silently dropping notes — with
+      // one marker per *cell* instead of per *pitch class*, every string still
+      // shows all of its in-window notes, covering every octave in the box.
+      type Cell = { pos: Position; step: number; midi: number; rank: number };
+      const byCell = new Map<string, Cell>();
+      const rank = (pos: Position, step: number): number => {
+        const isPatRoot = pc(step) === pc(pattern.root) ? 0 : 1;
+        return isPatRoot * 1_000_000 + (pos.midi ?? 0);
+      };
+      for (const item of inBox) {
+        const cellKey = item.pos.id;
+        const prev = byCell.get(cellKey);
+        const mine = rank(item.pos, item.step);
+        if (!prev || mine < prev.rank) {
+          byCell.set(cellKey, { pos: item.pos, step: item.step, midi: item.pos.midi ?? 0, rank: mine });
+        }
+      }
+      const cells = [...byCell.values()].sort(
+        (a, b) => a.midi - b.midi || a.pos.row - b.pos.row,
+      );
+      for (const c of cells) place(c.pos, c.step);
+      // Guarantee the anchor cell carries the root marker (cells claimed by an
+      // overlapping degree of this pattern get re-placed as the root).
+      if (anchorPos && !out.get(anchorPos.id)?.content.isRoot) {
+        place(anchorPos, 0);
+      }
       return;
     }
 
