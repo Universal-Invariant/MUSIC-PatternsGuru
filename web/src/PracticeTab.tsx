@@ -113,47 +113,17 @@ function fmtTime(sec: number): string {
   return `${m}:${r.toFixed(1).padStart(4, '0')}`;
 }
 
-/** Parse a pasted block into segments. Tolerant: bad lines are skipped. */
-function parseSegments(text: string): Segment[] {
-  const out: Segment[] = [];
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const sp = line.search(/\s/);
-    const timeStr = sp < 0 ? line : line.slice(0, sp);
-    const rest = sp < 0 ? '' : line.slice(sp + 1).trim();
-    const time = Number(timeStr.replace(/,/g, ''));
-    if (!Number.isFinite(time)) continue;
-    // Normalize note names: accept C Db D Eb E F Gb G Ab A Bb B (+ # forms).
-    let scaleId: string | null = null;
-    let chordId: string | null = null;
-    let root = 'C';
-    const m = /^(C|C#|Db|D|D#|Eb|E|F|F#|Gb|G|G#|Ab|A|A#|Bb|B)(b|#)?(m|maj|dim|aug|sus)?\b\s*(.*)$/i.exec(rest);
-    if (m) {
-      const flatAlt = (m[2] ?? '').toLowerCase();
-      const quality = (m[3] ?? '').toLowerCase();
-      const tail = (m[4] ?? '').trim().toLowerCase();
-      const pIdx = tokenPcFromName(((m[1] ?? 'C') + flatAlt).toLowerCase());
-      root = NOTE_TOKENS[pc(pIdx)] ?? 'C';
-      const combined = (quality + ' ' + tail).trim();
-      const st =
-        SCALE_TEMPLATES.find((x) => x.id === combined || x.name.toLowerCase() === combined) ??
-        SCALE_TEMPLATES.find((x) => tail.startsWith(x.name.toLowerCase()) || tail === x.id);
-      const ct =
-        CHORD_TEMPLATES.find((x) => x.id === combined || x.name.toLowerCase() === combined) ??
-        CHORD_TEMPLATES.find((x) => tail.startsWith(x.name.toLowerCase()) || tail === x.id);
-      if (st && (!ct || combined.includes(st.name.toLowerCase()))) scaleId = st.id;
-      else if (ct) chordId = ct.id;
-      else scaleId = 'dorian';
-    } else if (rest) {
-      scaleId = 'dorian';
-    } else {
-      scaleId = 'dorian';
-    }
-    if (!scaleId && !chordId) scaleId = 'dorian';
-    out.push({ id: uid(), time, scaleId, root, chordId, chordOffset: 0, overlays: [] });
-  }
-  return out;
+/* ---- text-grid parsing ---------------------------------------------------- */
+
+const NOTE_RE = '(?:Cb|C#|Db|D#|Eb|E#|Fb|F#|Gb|G#|Ab|A#|Bb|B#|[A-Ga-g][b#]?)';
+
+interface ParsedEvent {
+  time: number;
+  root: string;
+  scaleId: string | null;
+  chordId: string | null;
+  chordOffset: number | null;
+  label?: string;
 }
 
 function tokenPcFromName(raw: string): number {
@@ -165,8 +135,232 @@ function tokenPcFromName(raw: string): number {
   return table[name] ?? 0;
 }
 
+/** Seconds from `bar:beat` plus bpm, or plain seconds if the field isn't bar-based. */
+function parseTimeField(field: string, bpm: number): number | null {
+  const barBeat = /^(\d+)(?:[.:](\d+))?$/.exec(field.trim());
+  if (barBeat && bpm > 0) {
+    const bar = Number(barBeat[1]);
+    const beat = Number(barBeat[2] ?? 0);
+    return ((Math.max(1, bar) - 1) + Math.max(0, beat - (barBeat[2] ? 1 : 0))) * (60 / bpm);
+  }
+  const n = Number(field.replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function matchTemplate(tail: string): { scaleId: string | null; chordId: string | null } {
+  const t = tail.trim().toLowerCase();
+  if (!t) return { scaleId: null, chordId: null };
+  const st =
+    SCALE_TEMPLATES.find((x) => x.id === t || x.name.toLowerCase() === t) ??
+    SCALE_TEMPLATES.find((x) => t.startsWith(x.name.toLowerCase()) || t === x.id);
+  const ct =
+    CHORD_TEMPLATES.find((x) => x.id === t || x.name.toLowerCase() === t) ??
+    CHORD_TEMPLATES.find((x) => t.startsWith(x.name.toLowerCase()) || t === x.id);
+  if (st && !ct) return { scaleId: st.id, chordId: null };
+  if (ct && !st) return { scaleId: null, chordId: ct.id };
+  if (st && ct) {
+    // Exact-id wins over prefix matches; otherwise prefer whichever matched exactly.
+    const stExact = st.id === t || st.name.toLowerCase() === t;
+    const ctExact = ct.id === t || ct.name.toLowerCase() === t;
+    return ctExact && !stExact ? { scaleId: null, chordId: ct.id } : { scaleId: st.id, chordId: null };
+  }
+  return { scaleId: null, chordId: null };
+}
+
+/**
+ * Parse one event description after the time column. Accepts:
+ *   "D dorian"          → scale
+ *   "G7" / "G dom7"     → chord
+ *   "Dm7 | G mixolydian"→ chord + scale in one segment
+ *   "Am7 Bm7"           → first is the base chord, rest become overlays
+ */
+function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
+  const chunks = desc
+    .split(/[|,]/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const events: ParsedEvent[] = [];
+  for (const chunk of chunks) {
+    const m = new RegExp(`^(${NOTE_RE})\\s*(.*)$`, 'i').exec(chunk);
+    if (!m) {
+      events.push({ time: 0, root: fallbackRoot, scaleId: 'dorian', chordId: null, chordOffset: 0, label: chunk });
+      continue;
+    }
+    const root = NOTE_TOKENS[pc(tokenPcFromName(m[1]!))] ?? 'C';
+    const rest = (m[2] ?? '').trim();
+    if (!rest) {
+      events.push({ time: 0, root, scaleId: 'dorian', chordId: null, chordOffset: 0 });
+      continue;
+    }
+    // Split trailing tokens: greedy longest template match per space-separated word group.
+    const words = rest.split(/\s+/);
+    let matched = matchTemplate(words.join(' '));
+    let consumed = words.length;
+    if (!matched.scaleId && !matched.chordId) {
+      for (let k = words.length; k >= 1; k--) {
+        matched = matchTemplate(words.slice(0, k).join(' '));
+        if (matched.scaleId || matched.chordId) {
+          consumed = k;
+          break;
+        }
+      }
+    }
+    if (!matched.scaleId && !matched.chordId) matched = { scaleId: 'dorian', chordId: null };
+    events.push({
+      time: 0,
+      root,
+      scaleId: matched.scaleId,
+      chordId: matched.chordId,
+      chordOffset: 0,
+      label: words.slice(consumed).join(' ') || undefined,
+    });
+  }
+  return events;
+}
+
+/** Parse a pasted block into segments. Tolerant: bad lines are skipped. */
+function parseSegments(text: string, bpm = 0): Segment[] {
+  const out: Segment[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || /^\[/.test(line)) continue; // skip section headers like "[verse]"
+    const parts = /\t/.test(line) ? line.split(/\t+/) : line.split(/\s+/);
+    const timeStr = parts[0]!.trim();
+    const rest = parts.slice(1).join(' ').trim();
+    const time = parseTimeField(timeStr, bpm);
+    if (time === null) continue;
+    const evts = parseEventDesc(rest || 'D dorian', 'D');
+    let pendingOverlays: OverlaySpec[] = [];
+    for (const e of evts) {
+      const seg: Segment = {
+        id: uid(),
+        time,
+        scaleId: e.scaleId,
+        root: e.root,
+        chordId: e.chordId,
+        chordOffset: 0,
+        overlays: pendingOverlays,
+        label: e.label,
+      };
+      pendingOverlays = [];
+      out.push(seg);
+    }
+  }
+  return out;
+}
+
+/**
+ * Parse a chord-prose style block where each non-blank line is one change and
+ * blank lines separate sections that repeat with `reps` copies at `spacing`
+ * seconds apart. Example:
+ *   Am7
+ *   D7
+ *
+ *   Gmaj7
+ */
+function parseChordProse(text: string, spacing: number, reps: number): Segment[] {
+  const blocks: ParsedEvent[][] = [[]];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (blocks[blocks.length - 1]!.length) blocks.push([]);
+      continue;
+    }
+    blocks[blocks.length - 1]!.push(...parseEventDesc(line, 'C'));
+  }
+  const out: Segment[] = [];
+  let t = 0;
+  for (let rep = 0; rep < Math.max(1, reps); rep++) {
+    for (const block of blocks) {
+      for (const e of block) {
+        out.push({
+          id: uid(),
+          time: t,
+          scaleId: e.scaleId ?? 'major',
+          root: e.root,
+          chordId: e.chordId,
+          chordOffset: 0,
+          overlays: [],
+        });
+        t += spacing;
+      }
+    }
+  }
+  return out;
+}
+
 function serializeSegments(segs: readonly Segment[]): string {
   return segs.map((s) => `${s.time.toFixed(2)}\t${segmentName(s)}`).join('\n');
+}
+
+/* ---- persistence (#8): localStorage autosave + JSON export/import --------- */
+
+const STORAGE_KEY = 'mpg-practice-v1';
+
+interface PracticeSnapshot {
+  segments: Segment[];
+  bpm: number;
+  loopRegion: { start: number; end: number } | null;
+}
+
+function sanitizeSegment(raw: unknown): Segment | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const time = Number(r.time);
+  if (!Number.isFinite(time)) return null;
+  const root = typeof r.root === 'string' && NOTE_TOKENS.includes(r.root) ? r.root : 'C';
+  const scaleId = typeof r.scaleId === 'string' ? r.scaleId : null;
+  const chordId = typeof r.chordId === 'string' ? r.chordId : null;
+  const overlays = Array.isArray(r.overlays)
+    ? (r.overlays as unknown[])
+        .map((o) => {
+          if (!o || typeof o !== 'object') return null;
+          const x = o as Record<string, unknown>;
+          const chord = typeof x.chord === 'string' ? x.chord : null;
+          const offset = Number(x.offset);
+          if (!chord || !Number.isFinite(offset)) return null;
+          const explicitRoot = Number(x.root);
+          return Number.isFinite(explicitRoot) ? { chord, offset, root: explicitRoot } : { chord, offset };
+        })
+        .filter((o): o is OverlaySpec => o !== null)
+    : [];
+  const endTime = Number(r.endTime);
+  return {
+    id: typeof r.id === 'string' ? r.id : uid(),
+    time,
+    ...(Number.isFinite(endTime) && endTime > time ? { endTime } : {}),
+    scaleId: scaleId && SCALE_TEMPLATES.some((t) => t.id === scaleId) ? scaleId : scaleId,
+    root,
+    chordId: chordId && CHORD_TEMPLATES.some((t) => t.id === chordId) ? chordId : chordId,
+    chordOffset: Number.isFinite(Number(r.chordOffset)) ? Number(r.chordOffset) : 0,
+    overlays,
+    ...(typeof r.label === 'string' && r.label ? { label: r.label } : {}),
+  };
+}
+
+function sanitizeSnapshot(raw: unknown): PracticeSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.segments)) return null;
+  const segments = r.segments.map(sanitizeSegment).filter((s): s is Segment => s !== null);
+  if (segments.length === 0) return null;
+  const bpm = Number(r.bpm);
+  const loop = r.loopRegion as Record<string, unknown> | null | undefined;
+  const loopRegion =
+    loop && typeof loop === 'object' && Number.isFinite(Number(loop.start)) && Number.isFinite(Number(loop.end)) && Number(loop.end) > Number(loop.start)
+      ? { start: Number(loop.start), end: Number(loop.end) }
+      : null;
+  return { segments, bpm: Number.isFinite(bpm) && bpm >= 0 ? bpm : 0, loopRegion };
+}
+
+function loadSnapshot(): PracticeSnapshot | null {
+  try {
+    const txt = localStorage.getItem(STORAGE_KEY);
+    if (!txt) return null;
+    return sanitizeSnapshot(JSON.parse(txt));
+  } catch {
+    return null;
+  }
 }
 
 export interface PracticeSharedProps {
@@ -182,18 +376,24 @@ export interface PracticeSharedProps {
 }
 
 export function PracticeTab(props: PracticeSharedProps) {
-  const [segments, setSegments] = useState<Segment[]>(() => [
-    { ...defaultSegment(0) },
-    { ...defaultSegment(8), root: 'G', scaleId: 'mixolydian', chordId: 'dom7' },
-    { ...defaultSegment(16), root: 'A', scaleId: 'minor', chordId: 'min7' },
-    { ...defaultSegment(24), scaleId: 'dorian', root: 'D', chordId: 'min7' },
-  ]);
+  const saved = useMemo(loadSnapshot, []);
+  const [segments, setSegments] = useState<Segment[]>(
+    () => saved?.segments ?? [
+      { ...defaultSegment(0) },
+      { ...defaultSegment(8), root: 'G', scaleId: 'mixolydian', chordId: 'dom7' },
+      { ...defaultSegment(16), root: 'A', scaleId: 'minor', chordId: 'min7' },
+      { ...defaultSegment(24), scaleId: 'dorian', root: 'D', chordId: 'min7' },
+    ],
+  );
+  const [bpm, setBpm] = useState(() => saved?.bpm ?? 0);
+  const [proseSpacing, setProseSpacing] = useState(2);
+  const [proseReps, setProseReps] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set([0]));
   const [audioName, setAudioName] = useState<string>('');
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [loopRegion, setLoopRegion] = useState<{ start: number; end: number } | null>(null);
+  const [loopRegion, setLoopRegion] = useState<{ start: number; end: number } | null>(saved?.loopRegion ?? null);
   const [clip, setClip] = useState<readonly Segment[]>([]);
   const [pasteCount, setPasteCount] = useState(1);
   const [bulkStep, setBulkStep] = useState(1);
@@ -216,6 +416,18 @@ export function PracticeTab(props: PracticeSharedProps) {
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     };
   }, []);
+
+  /** Autosave progression to localStorage (debounced) — survives reloads (#8). */
+  useEffect(() => {
+    const h = window.setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ segments, bpm, loopRegion }));
+      } catch {
+        /* storage full / unavailable — ignore */
+      }
+    }, 400);
+    return () => window.clearTimeout(h);
+  }, [segments, bpm, loopRegion]);
 
   /**
    * Smooth play-head clock. `timeupdate` only fires ~4×/s which makes the
@@ -558,12 +770,67 @@ export function PracticeTab(props: PracticeSharedProps) {
     return span;
   }
 
+  /* ---- JSON export / import (#8) ------------------------------------------ */
+
+  function exportJson() {
+    const payload = JSON.stringify({ app: 'mpg-practice', version: 1, bpm, loopRegion, segments }, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(audioName || 'progression').replace(/\.[^.]+$/, '')}.mpg.json`;
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  function importJsonFile(f: File | undefined) {
+    if (!f) return;
+    void f.text().then((txt) => {
+      try {
+        const snap = sanitizeSnapshot(JSON.parse(txt));
+        if (!snap) {
+          alert('Not a valid MPG progression file.');
+          return;
+        }
+        setSegments(snap.segments);
+        setBpm(snap.bpm);
+        setLoopRegion(snap.loopRegion);
+        setSelected(new Set([0]));
+      } catch {
+        alert('Could not parse JSON file.');
+      }
+    });
+  }
+
+  /** Short chord symbol for timeline clips, e.g. "Dm7", "Gmix". */
+  function clipLabel(seg: Segment): string {
+    const r = SHARP_NAMES[tokenPc(seg.root)] ?? seg.root;
+    if (seg.chordId) {
+      const t = CHORD_TEMPLATES.find((x) => x.id === seg.chordId);
+      if (t) return `${r}${t.id}`; // id is already a compact symbol-ish token (min7, dom7…)
+    }
+    if (seg.scaleId) {
+      const t = SCALE_TEMPLATES.find((x) => x.id === seg.scaleId);
+      if (t) return `${r} ${t.name.slice(0, 4)}`;
+    }
+    return seg.label ?? r;
+  }
+
   /** Next marker's start time in sorted order (implicit end for clips without endTime). */
   const nextStartByIndex = useMemo(() => {
     const map = new Map<number, number>();
     for (let k = 0; k < sorted.length - 1; k++) map.set(sorted[k]!.i, sorted[k + 1]!.s.time);
     return map;
   }, [sorted]);
+
+  /** Seconds → 'bar:beat' at the current bpm (for editor tooltips / bar mode). */
+  function toBarBeat(sec: number): string | null {
+    if (bpm <= 0) return null;
+    const beats = sec * (bpm / 60);
+    const bar = Math.floor(beats) + 1;
+    const beat = Math.floor((beats - Math.floor(beats)) * 4) + 1;
+    return `${bar}:${beat}`;
+  }
 
   // Shared content pieces (rendered into the stacked or side-by-side layout).
   const viewerStack = (
@@ -645,7 +912,7 @@ export function PracticeTab(props: PracticeSharedProps) {
                       title="drag: change start time"
                       onPointerDown={(e) => beginClipDrag(e, i, 'start')}
                     />
-                    <span className="tl-clip-label">{SHARP_NAMES[tokenPc(s.root)] ?? s.root}</span>
+                    <span className="tl-clip-label">{clipLabel(s)}</span>
                     <span
                       className="tl-handle tl-handle-end"
                       title={s.endTime !== undefined ? 'drag: change end time · dbl-click clears explicit end' : 'drag: set end time'}
@@ -677,6 +944,7 @@ export function PracticeTab(props: PracticeSharedProps) {
         </button>
         <span className="mono">
           {fmtTime(currentTime)} / {duration ? fmtTime(duration) : '--:--'}
+          {bpm > 0 && <span className="barbeat" title={`bpm ${bpm}`}> · {toBarBeat(currentTime)}</span>}
         </span>
         {nextSeg && (
           <span className="muted">next @ {fmtTime(nextSeg.time)}: {segmentName(nextSeg)}</span>
@@ -729,6 +997,10 @@ export function PracticeTab(props: PracticeSharedProps) {
             <input type="number" min={1} max={32} value={patternLen} onChange={(e) => setPatternLen(Number(e.target.value) || 1)} />
           </label>
           <button onClick={snapTimesToGrid} disabled={!bulkStep}>snap times</button>
+          <label className="mini-field" title="Beats per minute — enables bar:beat time entry (e.g. 5:3 = bar 5, beat 3)">
+            bpm
+            <input type="number" min={0} max={300} value={bpm || ''} placeholder="0" onChange={(e) => setBpm(Math.max(0, Number(e.target.value) || 0))} />
+          </label>
           <button
             onClick={() => {
               const n = Number(prompt('Repeat the whole progression N more times?', '1'));
@@ -750,11 +1022,11 @@ export function PracticeTab(props: PracticeSharedProps) {
           <textarea
             className="prog-io"
             rows={3}
-            placeholder={'paste lines like:\n0\tD dorian\n8\tG mixolydian\n…or export the grid here'}
+            placeholder={`paste lines like:\n0\tD dorian\n8\tG mixolydian\n${bpm > 0 ? 'or bar:beat @ ' + bpm + ' bpm →\n1:1 Am7\n2:1 D7' : '(set bpm to allow bar:beat times)'}\n…or export the grid here`}
             onBlur={(e) => {
               const v = e.target.value.trim();
               if (!v) return;
-              const parsed = parseSegments(v);
+              const parsed = parseSegments(v, bpm);
               if (parsed.length) {
                 setSegments(parsed);
                 setSelected(new Set(parsed.map((_, i) => i).slice(0, 1)));
@@ -764,6 +1036,35 @@ export function PracticeTab(props: PracticeSharedProps) {
               e.target.value = serializeSegments(segments);
             }}
           />
+          <span className="muted" style={{ fontSize: 12 }}>import chord-prose (one change per line, blank line = section break):</span>
+          <textarea
+            className="prog-io"
+            rows={3}
+            placeholder={'Am7\nD7\n\nGmaj7\nCmaj7'}
+            onBlur={(e) => {
+              const v = e.target.value;
+              if (!v.trim()) return;
+              const parsed = parseChordProse(v, proseSpacing || 2, proseReps || 1);
+              if (parsed.length) {
+                setSegments(parsed);
+                setSelected(new Set([0]));
+                e.target.value = '';
+              }
+            }}
+          />
+          <label className="mini-field">
+            spacing (s)
+            <input type="number" min={0.25} max={64} step={0.25} value={proseSpacing} onChange={(e) => setProseSpacing(Number(e.target.value) || 2)} />
+          </label>
+          <label className="mini-field">
+            reps
+            <input type="number" min={1} max={64} value={proseReps} onChange={(e) => setProseReps(Number(e.target.value) || 1)} />
+          </label>
+          <button onClick={exportJson}>export JSON</button>
+          <label className="file-btn">
+            import JSON
+            <input type="file" accept=".json,application/json" onChange={(e) => importJsonFile(e.target.files?.[0])} />
+          </label>
         </div>
 
         <div className="prog-grid-wrap">
@@ -788,13 +1089,14 @@ export function PracticeTab(props: PracticeSharedProps) {
                   onMouseDown={(e) => selectRow(i, e)}
                 >
                   <td>{i + 1}</td>
-                  <td>
+                  <td title={toBarBeat(s.time) ? `bar:beat ${toBarBeat(s.time)}` : undefined}>
                     <input
                       type="number"
                       step={0.1}
                       value={s.time}
                       onChange={(e) => patch(i, { time: Number(e.target.value) || 0 })}
                     />
+                    {bpm > 0 && <span className="barbeat">{toBarBeat(s.time)}</span>}
                   </td>
                   <td>
                     <select value={s.root} onChange={(e) => patch(i, { root: e.target.value })}>
