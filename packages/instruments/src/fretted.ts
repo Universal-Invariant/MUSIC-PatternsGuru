@@ -50,6 +50,39 @@ export interface FrettedConfig {
   readonly centre?: readonly [number, number];
 }
 
+/** A horizontal fret window (inclusive columns) used for box-pattern views. */
+export interface FretWindow {
+  readonly colStart: number;
+  readonly colEnd: number;
+}
+
+/**
+ * Return a shallow clone of `base` whose preferred/candidate flags are
+ * recomputed for the given fret window: every in-window occurrence of each
+ * pitch class becomes preferred (classic CAGED-style box patterns light up on
+ * all six strings), while out-of-window candidates keep their original global
+ * ranking. The original instrument is never mutated.
+ */
+export function withFretWindow(base: Instrument, win: FretWindow): Instrument {
+  const src = base.pitchClassToPositions.bind(base);
+  const cache = new Map<number, ReturnType<typeof src>>();
+  return {
+    ...base,
+    pitchClassToPositions(pc: number) {
+      let list = cache.get(pc);
+      if (!list) {
+        list = src(pc).map((c) =>
+          c.position.col >= win.colStart && c.position.col <= win.colEnd
+            ? { ...c, preferred: true }
+            : c,
+        );
+        cache.set(pc, list);
+      }
+      return list;
+    },
+  };
+}
+
 /** Standard 6-string guitar tuning, high → low. */
 export const STANDARD_TUNING: readonly StringSpec[] = [
   { openMidi: 64, name: 'E' }, // E4
@@ -147,9 +180,8 @@ export function createFrettedInstrument(config: FrettedConfig): Instrument {
   // - `span` (highMidi - lowMidi across chosen positions) penalises patterns
   //   that scatter across the neck,
   // - `totalFrets` favours open-string-heavy, compact boxes over stretched ones.
-  // This produces contiguous, low-anchored scale/chord shapes that include open
-  // strings (e.g. E Ionian reads 0-2-3-4-5-7 on the two lowest strings) rather
-  // than stacking every note on the lowest string or scattering to mid-neck.
+  // Box-pattern ("fret window") views are handled separately by
+  // `withFretWindow`, which re-flags candidates without mutating this data.
   const preferredByPc = new Map<PitchClass, PositionCandidate>();
 
   function scoreOf(chosen: readonly PositionCandidate[]): number {

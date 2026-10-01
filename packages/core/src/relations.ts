@@ -28,13 +28,32 @@ export interface RelationOptions {
   readonly minMembers?: number;
   /** Connector style override. */
   readonly kind?: ConnectorKind;
+  /**
+   * When set, relation membership is restricted to positions inside this fret
+   * window (columns). This is what makes chord-in-scale underlays agree with a
+   * box-pattern view: every group only ever contains notes you can actually see.
+   */
+  readonly window?: { readonly colStart: number; readonly colEnd: number };
+}
+
+/** True when `cand` passes the optional window filter of {@link RelationOptions}. */
+function inWindow(
+  cand: { position: { col: number } },
+  window?: { colStart: number; colEnd: number },
+): boolean {
+  if (!window) return true;
+  return cand.position.col >= window.colStart && cand.position.col <= window.colEnd;
 }
 
 /** Positions on an instrument where any member of `pattern` appears. */
 export function positionsForPattern(
   instrument: Instrument,
   pattern: Pattern,
-  options: { includeAllCandidates?: boolean } = {},
+  options: {
+    includeAllCandidates?: boolean;
+    /** Restrict to a fret window (columns) so groups agree with box views. */
+    window?: { colStart: number; colEnd: number };
+  } = {},
 ): string[] {
   const out: string[] = [];
   for (const candidate of candidatesForPattern(instrument, pattern, options)) {
@@ -47,11 +66,18 @@ export function positionsForPattern(
 export function candidatesForPattern(
   instrument: Instrument,
   pattern: Pattern,
-  options: { includeAllCandidates?: boolean } = {},
+  options: {
+    includeAllCandidates?: boolean;
+    window?: { colStart: number; colEnd: number };
+  } = {},
 ): string[] {
   const out: string[] = [];
   for (const p of patternPcs(pattern)) {
     for (const cand of instrument.pitchClassToPositions(p)) {
+      if (!inWindow(cand, options.window)) continue;
+      // Inside a window every occurrence is meaningful (each string shows the
+      // note at its own fret), so we keep all in-window candidates regardless
+      // of the global "preferred" ranking, which is computed fretboard-wide.
       if (!options.includeAllCandidates && !cand.preferred) continue;
       out.push(cand.position.id);
     }
@@ -68,7 +94,10 @@ export function patternGroups(
   const layer = options.layer ?? 'patterns';
   const groups: RelationGroup[] = [];
   patterns.forEach((p, i) => {
-    const members = positionsForPattern(instrument, p, { includeAllCandidates: false });
+    const members = positionsForPattern(instrument, p, {
+      includeAllCandidates: false,
+      window: options.window,
+    });
     if (members.length < (options.minMembers ?? 1)) return;
     groups.push({
       id: `pattern:${p.id}`,
@@ -104,7 +133,14 @@ export function overlapGroups(
   const posOf = (pcs: Iterable<PitchClass>) => {
     const ids: string[] = [];
     for (const p of pcs) {
-      for (const c of instrument.pitchClassToPositions(p)) if (c.preferred) ids.push(c.position.id);
+      for (const c of instrument.pitchClassToPositions(p)) {
+        if (!inWindow(c, options.window)) continue;
+        // Windowed views show every in-window occurrence (the box pattern);
+        // unwindowed views use the canonical (preferred) one only. The
+        // window-aware instrument clone already flags exactly those.
+        if (!c.preferred) continue;
+        ids.push(c.position.id);
+      }
     }
     return ids;
   };
@@ -148,6 +184,11 @@ export function overlapGroups(
  * Chord-tone groups inside a scale view: for each diatonic chord of `scale`, a
  * group containing the positions of its members. With `arrow-fan` connectors this
  * becomes the classic "chords hidden in the scale" picture.
+ *
+ * Membership is window-aware: when `options.window` is set, only positions
+ * inside that fret window join a chord — so the underlay always agrees with the
+ * notes actually visible on screen (the box pattern). The chord's root position
+ * is preferred as the group anchor so labels sit on the bass note.
  */
 export function chordInScaleGroups(
   instrument: Instrument,
@@ -159,15 +200,35 @@ export function chordInScaleGroups(
     options.size === 3 ? diatonicTriadsOnly(scale) : chordsWithinScale(scale);
   const groups: RelationGroup[] = [];
   for (const c of chords) {
-    const members = positionsForPattern(instrument, c.pattern);
+    // On windowed (box-pattern) instruments every in-window occurrence is
+    // flagged preferred, so the default filter already clips correctly. On a
+    // plain instrument with an explicit window we keep all in-window candidates.
+    const includeAll = !!options.window;
+    const members = positionsForPattern(instrument, c.pattern, {
+      window: options.window,
+      includeAllCandidates: includeAll,
+    });
     if (members.length < (options.minMembers ?? 1)) continue;
+    // Anchor on the chord's own root position (lowest-string occurrence) so the
+    // label lands where a player reads the chord from.
+    const rootPc = pcAdd(c.pattern.root, 0);
+    let anchor: string | undefined;
+    for (const cand of instrument.pitchClassToPositions(rootPc)) {
+      if (!inWindow(cand, options.window)) continue;
+      if (includeAll || cand.preferred) {
+        if (members.includes(cand.position.id)) {
+          anchor = cand.position.id;
+          break;
+        }
+      }
+    }
     groups.push({
       id: `chord:${scale.id}:${c.degree}`,
       label: `${c.numeral} · ${c.symbol}`,
       color: TONAL_PALETTE.degrees[String(pc(c.degree - 1))] ?? TONAL_PALETTE.outside,
       kind: options.kind ?? 'blob',
       members,
-      anchor: members[0],
+      anchor: anchor ?? members[0],
       layer,
       meta: { degree: c.degree, numeral: c.numeral, symbol: c.symbol },
     });

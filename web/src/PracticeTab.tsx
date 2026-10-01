@@ -461,6 +461,8 @@ export interface PracticeSharedProps {
   background: boolean;
   effectsOn: boolean;
   windowCols: number;
+  /** Box-pattern view (Playground "Box pattern" mode); undefined = global view. */
+  fretWindow?: { colStart: number; colEnd: number };
 }
 
 export function PracticeTab(props: PracticeSharedProps) {
@@ -487,6 +489,15 @@ export function PracticeTab(props: PracticeSharedProps) {
   const [bulkStep, setBulkStep] = useState(1);
   const [bulkTranspose, setBulkTranspose] = useState(0);
   const [patternLen, setPatternLen] = useState(1);
+
+  /* ---- horizontal timeline zoom ------------------------------------------ */
+  /** Zoom factor: 1 = whole track fits the panel; >1 widens the content and
+   * activates horizontal scrolling so thin/adjacent clips stay editable. */
+  const [zoom, setZoomRaw] = useState(1);
+  const setZoom = (z: number) => setZoomRaw(Math.min(64, Math.max(1, z)));
+  const [followPlayhead, setFollowPlayhead] = useState(false);
+  const zoomRef = useRef<HTMLDivElement | null>(null);
+  const fitSpanRef = useRef<HTMLDivElement | null>(null);
 
   /** Undo / redo history stacks (#10). */
   const undoStack = useRef<Segment[][]>([]);
@@ -701,7 +712,8 @@ export function PracticeTab(props: PracticeSharedProps) {
       palette: PALETTES.find((p) => p.id === props.paletteId) ?? PALETTES[0]!,
       functionShapeId: props.functionShapeId,
       markerScale: props.markerScale,
-      window: { colStart: 0, colEnd: props.windowCols },
+      window: props.fretWindow ?? { colStart: 0, colEnd: props.windowCols },
+      fretWindow: props.fretWindow,
       toggles: { connectors: props.connectors, labels: true, background: props.background, effects: props.effectsOn },
       showOverlap: patterns.length >= 2,
     });
@@ -723,11 +735,71 @@ export function PracticeTab(props: PracticeSharedProps) {
   const span =
     Math.max(duration, ...segments.map((s) => s.time), ...segments.map((s) => s.endTime ?? 0), 30) * 1.05 || 30;
 
+  /** Visible (un-zoomed) width of the timeline — used for "fit" zoom. */
+  function visibleSpan(): number {
+    return fitSpanRef.current?.clientWidth || barRef.current?.clientWidth || 1;
+  }
+
+  /** Seconds per CSS pixel at the current zoom (the inverse of px-per-second). */
+  const secPerPx = span / (visibleSpan() * zoom);
+
+  /** Map a pointer event to track time. Uses the *content* rect (which spans
+   * `span` seconds and scrolls horizontally when zoomed), so it is correct at
+   * any zoom level without knowing scroll offsets. */
   function timeFromEvent(e: { clientX: number }): number {
     const rect = barRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
+    if (!rect || rect.width <= 0) return 0;
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     return frac * span;
+  }
+
+  /** Keep the playhead in view while playing/seeking when zoomed in. */
+  useEffect(() => {
+    if (!followPlayhead || !playing) return;
+    const el = zoomRef.current;
+    if (!el) return;
+    const x = currentTime * (zoom / secPerPx);
+    if (x < el.scrollLeft + 24 || x > el.scrollLeft + el.clientWidth - 48) {
+      el.scrollLeft = Math.max(0, x - el.clientWidth / 3);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTime, playing, followPlayhead, zoom, secPerPx]);
+
+  /** Wheel over the timeline: ctrl/⌘+wheel or shift+wheel zooms horizontally,
+   * keeping the time under the cursor fixed; plain wheel scrolls normally. */
+  function onTimelineWheel(e: React.WheelEvent) {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    e.preventDefault();
+    const el = zoomRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const anchorT = Math.min(span, Math.max(0, ((e.clientX - rect.left + el.scrollLeft) / zoom) * secPerPx));
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    const nextZoom = Math.min(64, Math.max(1, zoom * factor));
+    setZoomRaw(nextZoom);
+    // Restore scroll so the anchor time stays under the cursor after re-render.
+    requestAnimationFrame(() => {
+      const el2 = zoomRef.current;
+      if (el2) el2.scrollLeft = (anchorT / secPerPx) * nextZoom - (e.clientX - rect.left);
+    });
+  }
+
+  /** Fit the whole track into the panel (zoom = 1×). */
+  function fitTimeline() {
+    setZoomRaw(1);
+    if (zoomRef.current) zoomRef.current.scrollLeft = 0;
+  }
+
+  /** Follow the playhead while playing (only meaningful when zoomed in). */
+  function toggleFollow() {
+    const el = zoomRef.current;
+    if (!el) return;
+    if (followPlayhead) {
+      setFollowPlayhead(false);
+      return;
+    }
+    setFollowPlayhead(true);
+    el.scrollLeft = Math.max(0, currentTime * (zoom / secPerPx) - el.clientWidth / 3);
   }
 
   function patch(i: number, up: Partial<Segment>) {
@@ -1048,13 +1120,44 @@ export function PracticeTab(props: PracticeSharedProps) {
     </section>
   );
 
+  /* Dynamic tick spacing that stays readable at any zoom level. */
+  const tickStep = useMemo(() => {
+    const pxPerSec = (visibleSpan() * zoom) / span;
+    const candidates = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    return candidates.find((c) => c * pxPerSec >= 70) ?? 900;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom, span]);
+  const tickCount = Math.min(400, Math.floor(span / tickStep) + 1);
+
   const timelineSection = (
     <section className="panel">
       <h2>Timeline — click to seek · double-click to add a marker · drag clips to move / resize edges</h2>
+      <div className="timeline-zoombar">
+        <button onClick={() => setZoom(zoom / 1.5)} disabled={zoom <= 1} title="Zoom out (or Ctrl+wheel over the timeline)">−</button>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round((Math.log(zoom) / Math.log(64)) * 100)}
+          onInput={(e) => setZoom(Math.exp((Number((e.target as HTMLInputElement).value) / 100) * Math.log(64)))}
+          aria-label="Timeline zoom"
+          style={{ width: 140 }}
+        />
+        <button onClick={() => setZoom(zoom * 1.5)} title="Zoom in (or Ctrl+wheel over the timeline)">+</button>
+        <span className="muted" style={{ fontSize: 12, minWidth: 44 }}>{zoom.toFixed(zoom < 10 ? 1 : 0)}×</span>
+        <button onClick={fitTimeline} disabled={zoom <= 1} title="Fit whole track">fit</button>
+        <label className="muted" style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={followPlayhead} onChange={(e) => setFollowPlayhead(e.target.checked)} /> follow
+        </label>
+        <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>ctrl/⌘ + wheel to zoom</span>
+      </div>
           <div className="timeline-track">
+            <div ref={fitSpanRef} className="timeline-scroll" onWheel={onTimelineWheel}>
+            <div className="timeline-content" ref={barRef} style={{ width: `${zoom * 100}%` }}>
             <div className="timeline-timeaxis" aria-hidden="true">
-              {Array.from({ length: 7 }, (_, k) => {
-                const t = (span / 6) * k;
+              {Array.from({ length: tickCount }, (_, k) => {
+                const t = tickStep * k;
                 return (
                   <span key={k} className="tick" style={{ left: `${(t / span) * 100}%` }}>
                     {fmtTime(t)}
@@ -1064,7 +1167,6 @@ export function PracticeTab(props: PracticeSharedProps) {
             </div>
             <div
               className="timeline"
-              ref={barRef}
               onPointerDown={(e) => {
                 if (tlDrag.current) return;
                 seek(timeFromEvent(e));
@@ -1113,6 +1215,8 @@ export function PracticeTab(props: PracticeSharedProps) {
               })}
               <div className="timeline-playhead" style={{ left: `${Math.min(100, (currentTime / span) * 100)}%` }} />
             </div>
+            </div>{/* .timeline-content */}
+            </div>{/* .timeline-scroll */}
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
             Active: {activeIdx >= 0 ? `${segmentName(segments[activeIdx]!)} (${fmtTime(segments[activeIdx]!.time)})` : 'none yet'}

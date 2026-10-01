@@ -15,6 +15,8 @@ import {
   createFrettedInstrument,
 } from './fretted.js';
 
+export { withFretWindow, type FretWindow } from './fretted.js';
+
 export const guitarStandard: Instrument = createFrettedInstrument({
   id: 'guitar-standard',
   name: 'Guitar (Standard)',

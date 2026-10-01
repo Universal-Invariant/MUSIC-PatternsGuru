@@ -57,6 +57,11 @@ export function App() {
   /** Function-based shape palette id (circles for chord tones, squares for the rest…). */
   const [functionShapeId, setFunctionShapeId] = useState('uniform-disc');
   const [fretWindow, setFretWindow] = useState<'0-12' | '0-15' | '0-24'>('0-12');
+  /** Board view mode: global one-per-pitch-class vs box-pattern clipping. */
+  const [viewMode, setViewMode] = useState<'global' | 'box'>('global');
+  /** Box-pattern window: first visible fret and the number of frets it spans. */
+  const [boxStart, setBoxStart] = useState(0);
+  const [boxWidth, setBoxWidth] = useState(5);
   const [showChordsInScale, setShowChordsInScale] = useState(false);
   const [chordSize, setChordSize] = useState<3 | 4>(4);
   const [connectors, setConnectors] = useState(true);
@@ -106,6 +111,15 @@ export function App() {
 
   const windowCols = fretWindow === '0-12' ? 12 : fretWindow === '0-15' ? 15 : 24;
 
+  /** Box-pattern view: clip the board to [boxStart, boxStart + width - 1]. */
+  const box = useMemo(() => {
+    if (viewMode !== 'box') return undefined;
+    const maxCol = Math.max(1, instrument.layout().cols - 1);
+    const colStart = Math.min(Math.max(0, boxStart), maxCol);
+    const colEnd = Math.min(colStart + Math.max(2, boxWidth) - 1, maxCol);
+    return { colStart, colEnd };
+  }, [viewMode, boxStart, boxWidth, instrument]);
+
   const scene = useMemo(() => {
     const patterns = searched ? [...selection.patterns, searched] : selection.patterns;
     return buildScene(instrument, {
@@ -114,7 +128,8 @@ export function App() {
       markerScale,
       palette,
       functionShapeId,
-      window: { colStart: 0, colEnd: windowCols },
+      window: box ?? { colStart: 0, colEnd: windowCols },
+      fretWindow: box,
       toggles: { connectors, labels: true, background, effects: effectsOn },
       showChordsInScale,
       chordSize,
@@ -131,6 +146,7 @@ export function App() {
     functionShapeId,
     markerScale,
     windowCols,
+    box,
     connectors,
     background,
     effectsOn,
@@ -432,6 +448,50 @@ export function App() {
 
           <section className="panel">
             <h2>Layers &amp; Analysis</h2>
+            <div className="field" style={{ marginBottom: 8 }}>
+              Board view
+              <div className="seg">
+                <button
+                  className={viewMode === 'global' ? 'on' : ''}
+                  onClick={() => setViewMode('global')}
+                  title="One marker per pitch class across the whole neck"
+                >
+                  Global
+                </button>
+                <button
+                  className={viewMode === 'box' ? 'on' : ''}
+                  onClick={() => setViewMode('box')}
+                  title="Box pattern: every note on every string within a fret window"
+                >
+                  Box pattern
+                </button>
+              </div>
+            </div>
+            {viewMode === 'box' && (
+              <div className="row" style={{ marginBottom: 8 }}>
+                <label className="field">
+                  From fret
+                  <input
+                    type="number"
+                    min={0}
+                    max={24}
+                    value={boxStart}
+                    onChange={(e) => setBoxStart(Number(e.target.value))}
+                    style={{ width: 70 }}
+                  />
+                </label>
+                <label className="field">
+                  Width (frets)
+                  <select value={boxWidth} onChange={(e) => setBoxWidth(Number(e.target.value))}>
+                    {[4, 5, 6, 7, 8, 12].map((w) => (
+                      <option key={w} value={w}>
+                        {w}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
             <div className="checks">
               <label>
                 <input

@@ -118,6 +118,8 @@ function assignMarkers(
   includeAllCandidates: boolean,
   emphasis: readonly number[],
   window: ResolvedWindow,
+  /** Box-pattern view: fill every in-window occurrence on every string. */
+  fretWindow?: { colStart: number; colEnd: number },
 ): Map<string, Assignment> {
   const out = new Map<string, Assignment>();
   const takenPcs = new Set<number>(); // pc -> already has a primary marker (shape mode)
@@ -173,6 +175,30 @@ function assignMarkers(
         scale: content.isRoot ? 1.15 : 1,
         step: pc(step),
       });
+    }
+
+    // Box-pattern ("position") view: show the scale/chord clipped to a fixed
+    // fret window — every string contributes its in-window occurrences of each
+    // member pitch class, so the classic CAGED-style shape appears across all
+    // six strings between frets N and M. Positions outside the window are
+    // skipped entirely (pure clipping), unlike the dimmed global view.
+    if (fretWindow) {
+      const seen = new Set<string>();
+      const inBox: { pos: Position; step: number }[] = [];
+      for (const step of pattern.steps) {
+        const targetPc = pcAdd(pattern.root, step);
+        for (const cand of instrument.pitchClassToPositions(targetPc)) {
+          const col = cand.position.col;
+          if (col < fretWindow.colStart || col > fretWindow.colEnd) continue;
+          const key = `${cand.position.id}:${targetPc}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          inBox.push({ pos: cand.position, step });
+        }
+      }
+      inBox.sort((a, b) => (a.pos.midi ?? 0) - (b.pos.midi ?? 0) || a.pos.row - b.pos.row);
+      for (const p of inBox) place(p.pos, p.step);
+      return;
     }
 
     // The entire fretboard is ALWAYS populated with one marker per pitch class.
@@ -326,6 +352,7 @@ export class FretboardPresenter implements Presenter {
       scene.includeAllCandidates ?? false,
       scene.emphasis ?? [1],
       window,
+      scene.fretWindow,
     );
     // User-controlled global dot/text size (the "marker size" slider in the UI).
     const markerScale = scene.markerScale ?? 1;
@@ -366,6 +393,7 @@ export class FretboardPresenter implements Presenter {
       // markers outside the movable window become semi-transparent so the
       // in-window shape pops. "All positions" disables this entirely.
       const outsideWindow =
+        !scene.fretWindow &&
         !scene.includeAllCandidates &&
         (a.position.col < window.colStart || a.position.col > window.colEnd);
       markers.push({

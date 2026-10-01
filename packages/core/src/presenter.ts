@@ -286,6 +286,14 @@ export interface VisualizationScene {
   readonly effects?: Partial<Record<'root' | 'member' | 'outside', Effect>>;
   /** Restrict the drawn window (frets 0-12, keys C3-C5, ...). */
   readonly window?: ViewWindow;
+  /**
+   * Box-pattern ("position") view: when set, pattern markers show EVERY
+   * occurrence of each member pitch class inside this fret window — one note
+   * per string within the box — instead of the default one-marker-per-pitch-class
+   * selection. The presenter clips rendering to `window`, so this is a pure
+   * "clip + fill the box" operation (classic CAGED patterns).
+   */
+  readonly fretWindow?: { colStart: number; colEnd: number };
   /** Show positions that are not in any pattern. */
   readonly showBackground?: boolean;
   /** Include every candidate position for a pitch, or only the preferred one. */

@@ -32,6 +32,34 @@ import {
 } from '@mpg/core';
 import { rootTemplateAt, findTemplate } from '@mpg/core/library';
 
+/**
+ * Box-pattern view: returns a lightweight clone of `base` whose preferred
+ * flags mark every in-window occurrence of each pitch class, so CAGED-style
+ * boxes light up on all strings. Pure — the original instrument is untouched.
+ */
+export function withFretWindow(
+  base: Instrument,
+  win: { colStart: number; colEnd: number },
+): Instrument {
+  const src = base.pitchClassToPositions.bind(base);
+  const cache = new Map<number, ReturnType<typeof src>>();
+  return {
+    ...base,
+    pitchClassToPositions(pc: number) {
+      let list = cache.get(pc);
+      if (!list) {
+        list = src(pc).map((c) =>
+          c.position.col >= win.colStart && c.position.col <= win.colEnd
+            ? { ...c, preferred: true }
+            : c,
+        );
+        cache.set(pc, list);
+      }
+      return list;
+    },
+  };
+}
+
 export interface LayerToggle {
   readonly connectors: boolean;
   readonly labels: boolean;
@@ -54,6 +82,14 @@ export interface BuildSceneOptions {
   modes?: readonly NotationMode[];
   palette?: Palette;
   window?: ViewWindow;
+  /**
+   * Box-pattern ("position") view: when set, pattern markers are clipped to
+   * this fret window AND every in-window occurrence is shown on all strings
+   * (CAGED-style boxes), instead of one canonical position per pitch class.
+   * Relation groups (chords-in-scale, overlaps) are restricted to the same
+   * window so the underlay always agrees with what is visible.
+   */
+  fretWindow?: { colStart: number; colEnd: number };
   toggles?: Partial<LayerToggle>;
   /** Draw diatonic chord blobs inside the first scale-typed pattern. */
   showChordsInScale?: boolean;
@@ -125,15 +161,22 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
   const mode = options.mode ?? 'tonal';
   const modes = options.modes ?? options.patterns.map(() => mode);
 
+  // Box-pattern view: swap in a window-aware instrument whose preferred flags
+  // mark *every* in-window occurrence, so patterns light up all six strings
+  // inside the box. The presenter still clips markers to `scene.window`, and we
+  // pass the same window to relation grouping so connectors match what's shown.
+  const win = options.fretWindow;
+  const viewInstrument = win ? withFretWindow(instrument, win) : instrument;
+
   const groups: RelationGroup[] = [];
   if (toggles.connectors) {
-    groups.push(...patternGroups(instrument, options.patterns, { layer: 'patterns' }));
+    groups.push(...patternGroups(viewInstrument, options.patterns, { layer: 'patterns' }));
     if (options.showOverlap && options.patterns.length >= 2) {
-      groups.push(...overlapGroups(instrument, options.patterns[0]!, options.patterns[1]!));
+      groups.push(...overlapGroups(viewInstrument, options.patterns[0]!, options.patterns[1]!, { window: win }));
     }
     for (let i = 0; i < (options.overlayChords?.length ?? 0); i++) {
       const chord = options.overlayChords![i]!;
-      const members = positionsForPatternSafe(instrument, chord);
+      const members = positionsForPatternSafe(viewInstrument, chord);
       if (members.length === 0) continue;
       groups.push({
         id: `overlay:${chord.id}:${i}`,
@@ -149,10 +192,11 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
       const scale = options.patterns.find((p) => p.kind === 'scale' || p.kind === 'mode');
       if (scale) {
         groups.push(
-          ...chordInScaleGroups(instrument, scale, {
+          ...chordInScaleGroups(viewInstrument, scale, {
             size: options.chordSize ?? 4,
             minMembers: 3,
             kind: 'hull',
+            window: win,
           }),
         );
       }
@@ -170,8 +214,13 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     ...overlays.map(() => 0.82),
   ];
 
+  // Box-pattern view is exclusive: when a fret window is active, pattern
+  // markers show every in-window occurrence on every string (the classic CAGED
+  // "position" picture) — never the fretboard-wide one-per-pitch-class set.
+  const includeAll = win ? false : (options.includeAllCandidates ?? false);
+
   return {
-    instrument,
+    instrument: viewInstrument,
     patterns: allPatterns,
     modes: allModes.slice(0, allPatterns.length),
     emphasis,
@@ -181,9 +230,10 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     effects: toggles.effects
       ? { root: options.rootEffect ?? EFFECT_ROOT_GLOW, member: EFFECT_NONE, outside: EFFECT_NONE }
       : undefined,
-    window: options.window,
+    window: win ?? options.window,
+    fretWindow: win,
     showBackground: toggles.background,
-    includeAllCandidates: options.includeAllCandidates ?? false,
+    includeAllCandidates: includeAll,
     markerScale: options.markerScale ?? 1,
     shapes: options.shapes,
     functionShapes:
