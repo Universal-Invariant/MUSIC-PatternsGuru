@@ -76,6 +76,10 @@ export interface RenderMarker {
   readonly alpha?: number;
   /** Scale multiplier for emphasis. */
   readonly scale?: number;
+  /** Label font-size multiplier (independent of dot `scale`). */
+  readonly fontSizeScale?: number;
+  /** Label halo/outline thickness multiplier (1 = default, 0 = none). */
+  readonly haloWidthScale?: number;
   /** Marker geometry (from the shape palette). Undefined = disc. */
   readonly shape?: MarkerShape;
 }
@@ -300,6 +304,17 @@ export interface VisualizationScene {
   readonly includeAllCandidates?: boolean;
   /** Global size multiplier for pattern markers (dots AND their text). 1 = default. */
   readonly markerScale?: number;
+  /**
+   * Font-size multiplier applied to marker label text ONLY (the dot keeps its
+   * markerScale size). Lets users enlarge small interval/degree labels without
+   * growing the shapes. 1 = default (auto-fit to marker radius).
+   */
+  readonly fontSizeScale?: number;
+  /**
+   * Thickness multiplier for the contrasting halo/outline drawn behind label
+   * text (paint-order stroke). 1 = default; 0 disables the halo.
+   */
+  readonly haloWidthScale?: number;
   /** Marker geometry palette: one shape per role. Undefined = all discs. */
   readonly shapes?: ShapePalette;
   /**

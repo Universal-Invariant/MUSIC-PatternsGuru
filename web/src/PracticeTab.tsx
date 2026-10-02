@@ -70,23 +70,34 @@ function defaultSegment(time: number): Segment {
   return { id: uid(), time, scaleId: 'dorian', root: 'D', chordId: 'min7', chordOffset: 0, overlays: [] };
 }
 
+/**
+ * User-library-aware template lists (#2). The merged arrays are passed in as
+ * arguments so this module-level code stays pure and testable.
+ */
+export interface TemplateLists {
+  scales: Template[];
+  chords: Template[];
+}
+
 /** Build the concrete patterns for one segment (scale + base chord + overlays). */
-function segmentPatterns(seg: Segment): Pattern[] {
+function segmentPatterns(seg: Segment, lists?: TemplateLists): Pattern[] {
+  const scales = lists?.scales ?? SCALE_TEMPLATES;
+  const chords = lists?.chords ?? CHORD_TEMPLATES;
   const rootPc = tokenPc(seg.root);
   const out: Pattern[] = [];
   if (seg.scaleId) {
-    const t = SCALE_TEMPLATES.find((x) => x.id === seg.scaleId);
+    const t = scales.find((x) => x.id === seg.scaleId);
     if (t) out.push(rootTemplateAt(t, rootPc));
   }
   if (seg.chordId) {
-    const t = CHORD_TEMPLATES.find((x) => x.id === seg.chordId);
+    const t = chords.find((x) => x.id === seg.chordId);
     if (t) {
       const chordRoot = seg.chordRoot ? tokenPc(seg.chordRoot) : pcAdd(rootPc, seg.chordOffset ?? 0);
       out.push(rootTemplateAt(t, chordRoot));
     }
   }
   for (const o of seg.overlays) {
-    const t = CHORD_TEMPLATES.find((x) => x.id === o.chord);
+    const t = chords.find((x) => x.id === o.chord);
     if (!t) continue;
     const r = o.root !== undefined ? pc(o.root) : pcAdd(rootPc, o.offset);
     out.push({ ...rootTemplateAt(t, r), id: `${t.id}@${r}:ov:${seg.id}` });
@@ -94,14 +105,16 @@ function segmentPatterns(seg: Segment): Pattern[] {
   return out;
 }
 
-function segmentName(seg: Segment): string {
+function segmentName(seg: Segment, lists?: TemplateLists): string {
+  const scales = lists?.scales ?? SCALE_TEMPLATES;
+  const chords = lists?.chords ?? CHORD_TEMPLATES;
   const parts: string[] = [];
   if (seg.scaleId) {
-    const t = SCALE_TEMPLATES.find((x) => x.id === seg.scaleId);
+    const t = scales.find((x) => x.id === seg.scaleId);
     if (t) parts.push(`${seg.root} ${t.name}`);
   }
   if (seg.chordId) {
-    const t = CHORD_TEMPLATES.find((x) => x.id === seg.chordId);
+    const t = chords.find((x) => x.id === seg.chordId);
     if (t) {
       const r = seg.chordRoot ? seg.chordRoot : SHARP_NAMES[pcAdd(tokenPc(seg.root), seg.chordOffset ?? 0)];
       parts.push(`${r} ${t.name}`);
@@ -161,19 +174,21 @@ interface TemplateMatch {
   matched: boolean;
 }
 
-export function matchTemplate(tail: string): TemplateMatch {
+export function matchTemplate(tail: string, lists?: TemplateLists): TemplateMatch {
   const t = tail.trim().toLowerCase();
   if (!t) return { scaleId: null, chordId: null, matched: false };
+  const scales = lists?.scales ?? SCALE_TEMPLATES;
+  const chords = lists?.chords ?? CHORD_TEMPLATES;
   const st =
-    SCALE_TEMPLATES.find((x) => x.id === t || x.name.toLowerCase() === t) ??
-    SCALE_TEMPLATES.find(
+    scales.find((x) => x.id === t || x.name.toLowerCase() === t) ??
+    scales.find(
       (x) => x.name.toLowerCase() !== t && t.startsWith(`${x.name.toLowerCase()} `),
     );
   const ct =
-    CHORD_TEMPLATES.find((x) => x.id === t || x.name.toLowerCase() === t) ??
+    chords.find((x) => x.id === t || x.name.toLowerCase() === t) ??
     // Prefer the longest matching chord name: "minor seventh" must win over
     // "minor" so symbols like Am7 don't collapse to a minor triad.
-    [...CHORD_TEMPLATES]
+    [...chords]
       .filter((x) => x.name.toLowerCase() !== t && t.startsWith(`${x.name.toLowerCase()} `))
       .sort((a, b) => b.name.length - a.name.length)[0];
   // When the whole tail names both a scale and a chord ("D dorian minor seventh"),
@@ -189,7 +204,7 @@ export function matchTemplate(tail: string): TemplateMatch {
  * shorthand chord symbols (m7, maj7, dom7, dim, sus4, aug …) as well as full
  * template names ("minor seventh"). Returns null when nothing matches.
  */
-function matchChordSymbol(suffix: string): { chordId: string; qualityOffset: number } | null {
+function matchChordSymbol(suffix: string, lists?: TemplateLists): { chordId: string; qualityOffset: number } | null {
   const s = suffix.trim().toLowerCase();
   if (!s) return null;
   // Shorthand symbol grammar → real template ids from the core library.
@@ -219,11 +234,9 @@ function matchChordSymbol(suffix: string): { chordId: string; qualityOffset: num
   for (const [re, id] of table) {
     if (re.test(s) && CHORD_TEMPLATES.some((x) => x.id === id)) return { chordId: id, qualityOffset: 0 };
   }
-  // Full template name/id/alias last ("Minor Seventh", "dom7", …).
-  const named = CHORD_TEMPLATES.find(
-    (x) => x.id === s || x.name.toLowerCase() === s || x.aliases.includes(s),
-  );
-  if (named) return { chordId: named.id, qualityOffset: 0 };
+  // Full template name/id/alias last ("Minor Seventh", "dom7", …) — includes user library.
+  const named = findChordTemplate(s, lists);
+  if (named) return { chordId: named.id, qualityOffset: defaultChordOffset(named) };
   return null;
 }
 
@@ -238,6 +251,13 @@ export function defaultChordOffset(t: Template): number {
   return 0;
 }
 
+/** Chord-symbol lookup that also honors user-library chords (#2). */
+function findChordTemplate(s: string, lists?: TemplateLists): Template | undefined {
+  return (lists?.chords ?? CHORD_TEMPLATES).find(
+    (x) => x.id === s || x.name.toLowerCase() === s || x.aliases.includes(s),
+  );
+}
+
 /**
  * Parse one event description after the time column. Accepts:
  *   "D dorian"          → scale
@@ -245,7 +265,7 @@ export function defaultChordOffset(t: Template): number {
  *   "Dm7 | G mixolydian"→ chord + scale in one segment
  *   "Am7 Bm7"           → first is the base chord, rest become overlays
  */
-function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
+function parseEventDesc(desc: string, fallbackRoot: string, lists?: TemplateLists): ParsedEvent[] {
   const chunks = desc
     .split(/[|,]/)
     .map((c) => c.trim())
@@ -264,7 +284,7 @@ function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
       continue;
     }
     // 1) Shorthand chord symbol glued to the root: "m7", "maj7", "dim", …
-    const sym = matchChordSymbol(rest);
+    const sym = matchChordSymbol(rest, lists);
     if (sym) {
       events.push({
         time: 0,
@@ -277,11 +297,11 @@ function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
     }
     // Split trailing tokens: greedy longest template match per space-separated word group.
     const words = rest.split(/\s+/);
-    let matched = matchTemplate(words.join(' '));
+    let matched = matchTemplate(words.join(' '), lists);
     let consumed = words.length;
     if (!matched.matched) {
       for (let k = words.length - 1; k >= 1; k--) {
-        matched = matchTemplate(words.slice(0, k).join(' '));
+        matched = matchTemplate(words.slice(0, k).join(' '), lists);
         if (matched.matched) {
           consumed = k;
           break;
@@ -307,7 +327,7 @@ function parseEventDesc(desc: string, fallbackRoot: string): ParsedEvent[] {
 }
 
 /** Parse a pasted block into segments. Tolerant: bad lines are skipped. */
-export function parseSegments(text: string, bpm = 0): Segment[] {
+export function parseSegments(text: string, bpm = 0, lists?: TemplateLists): Segment[] {
   const out: Segment[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -317,7 +337,7 @@ export function parseSegments(text: string, bpm = 0): Segment[] {
     const rest = parts.slice(1).join(' ').trim();
     const time = parseTimeField(timeStr, bpm);
     if (time === null) continue;
-    const evts = parseEventDesc(rest || 'D dorian', 'D');
+    const evts = parseEventDesc(rest || 'D dorian', 'D', lists);
     let pendingOverlays: OverlaySpec[] = [];
     for (const e of evts) {
       const seg: Segment = {
@@ -346,7 +366,7 @@ export function parseSegments(text: string, bpm = 0): Segment[] {
  *
  *   Gmaj7
  */
-export function parseChordProse(text: string, spacing: number, reps: number): Segment[] {
+export function parseChordProse(text: string, spacing: number, reps: number, lists?: TemplateLists): Segment[] {
   const blocks: ParsedEvent[][] = [[]];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -354,7 +374,7 @@ export function parseChordProse(text: string, spacing: number, reps: number): Se
       if (blocks[blocks.length - 1]!.length) blocks.push([]);
       continue;
     }
-    blocks[blocks.length - 1]!.push(...parseEventDesc(line, 'C'));
+    blocks[blocks.length - 1]!.push(...parseEventDesc(line, 'C', lists));
   }
   const out: Segment[] = [];
   let t = 0;
@@ -378,8 +398,8 @@ export function parseChordProse(text: string, spacing: number, reps: number): Se
   return out;
 }
 
-export function serializeSegments(segs: readonly Segment[]): string {
-  return segs.map((s) => `${s.time.toFixed(2)}\t${segmentName(s)}`).join('\n');
+export function serializeSegments(segs: readonly Segment[], lists?: TemplateLists): string {
+  return segs.map((s) => `${s.time.toFixed(2)}\t${segmentName(s, lists)}`).join('\n');
 }
 
 /* ---- persistence (#8): localStorage autosave + JSON export/import --------- */
@@ -468,9 +488,16 @@ export interface PracticeSharedProps {
   windowCols: number;
   /** Box-pattern view (Playground "Box pattern" mode); undefined = global view. */
   fretWindow?: { colStart: number; colEnd: number };
+  /** #1: label font-size multiplier (shared with Playground). */
+  fontSizeScale?: number;
+  /** #1: label halo/border thickness multiplier (shared with Playground). */
+  haloWidthScale?: number;
+  /** #2: user-library merged template lists (null/undefined = built-ins only). */
+  lists?: TemplateLists;
 }
 
 export function PracticeTab(props: PracticeSharedProps) {
+  const lists = props.lists;
   const saved = useMemo(loadSnapshot, []);
   const [segments, setSegments] = useState<Segment[]>(
     () => saved?.segments ?? [
@@ -802,13 +829,15 @@ export function PracticeTab(props: PracticeSharedProps) {
   }, [sorted, currentTime]);
 
   const frameOf = (seg: Segment | undefined) => {
-    const patterns = seg ? segmentPatterns(seg) : [];
+    const patterns = seg ? segmentPatterns(seg, lists) : [];
     const scene = buildScene(props.instrument, {
       patterns,
       mode: props.mode,
       palette: PALETTES.find((p) => p.id === props.paletteId) ?? PALETTES[0]!,
       functionShapeId: props.functionShapeId,
       markerScale: props.markerScale,
+      fontSizeScale: props.fontSizeScale ?? 1,
+      haloWidthScale: props.haloWidthScale ?? 1,
       // The fretboard itself always shows the full display range (never cropped
       // by the box); `fretWindow` only clips which *notes* are drawn.
       window: { colStart: 0, colEnd: props.windowCols },
@@ -1202,7 +1231,7 @@ export function PracticeTab(props: PracticeSharedProps) {
         <div className="board-card">
           <div className="caption">
             <strong>
-              {props.instrument.name} — now ({activeIdx >= 0 ? segmentName(segments[activeIdx]!) : 'no active change yet'})
+              {props.instrument.name} — now ({activeIdx >= 0 ? segmentName(segments[activeIdx]!, lists) : 'no active change yet'})
             </strong>
             {nextSeg && <span>changes @ {fmtTime(nextSeg.time)}</span>}
           </div>
@@ -1213,7 +1242,7 @@ export function PracticeTab(props: PracticeSharedProps) {
         <div className="board-card upcoming">
           <div className="caption">
             <strong>up next — prepare this shape</strong>
-            <span>{nextSeg ? `${segmentName(nextSeg)} @ ${fmtTime(nextSeg.time)}` : 'nothing queued'}</span>
+            <span>{nextSeg ? `${segmentName(nextSeg, lists)} @ ${fmtTime(nextSeg.time)}` : 'nothing queued'}</span>
           </div>
           {nextSeg ? (
             <FrameSvg frame={nextFrame} className="frame-fit" />
@@ -1297,7 +1326,7 @@ export function PracticeTab(props: PracticeSharedProps) {
                     key={s.id}
                     className={cls}
                     style={{ left: `${left}%`, width: `${width}%` }}
-                    title={`${fmtTime(s.time)} – ${fmtTime(end)} · ${segmentName(s)} (drag: move · edges: resize)`}
+                    title={`${fmtTime(s.time)} – ${fmtTime(end)} · ${segmentName(s, lists)} (drag: move · edges: resize)`}
                     onPointerDown={(e) => beginClipDrag(e, i, 'move')}
                   >
                     <span
@@ -1324,8 +1353,8 @@ export function PracticeTab(props: PracticeSharedProps) {
             </div>{/* .timeline-scroll */}
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Active: {activeIdx >= 0 ? `${segmentName(segments[activeIdx]!)} (${fmtTime(segments[activeIdx]!.time)})` : 'none yet'}
-            {nextSeg ? ` → next @ ${fmtTime(nextSeg.time)}: ${segmentName(nextSeg)}` : ''}
+            Active: {activeIdx >= 0 ? `${segmentName(segments[activeIdx]!, lists)} (${fmtTime(segments[activeIdx]!.time)})` : 'none yet'}
+            {nextSeg ? ` → next @ ${fmtTime(nextSeg.time)}: ${segmentName(nextSeg, lists)}` : ''}
       </div>
     </section>
   );
@@ -1342,7 +1371,7 @@ export function PracticeTab(props: PracticeSharedProps) {
           {bpm > 0 && <span className="barbeat" title={`bpm ${bpm}`}> · {toBarBeat(currentTime)}</span>}
         </span>
         {nextSeg && (
-          <span className="muted">next @ {fmtTime(nextSeg.time)}: {segmentName(nextSeg)}</span>
+          <span className="muted">next @ {fmtTime(nextSeg.time)}: {segmentName(nextSeg, lists)}</span>
         )}
         <button
           onClick={() =>
@@ -1439,14 +1468,14 @@ export function PracticeTab(props: PracticeSharedProps) {
             onBlur={(e) => {
               const v = e.target.value.trim();
               if (!v) return;
-              const parsed = parseSegments(v, bpm);
+              const parsed = parseSegments(v, bpm, lists);
               if (parsed.length) {
                 commitSegs(parsed);
                 setSelected(new Set(parsed.map((_, i) => i).slice(0, 1)));
               }
             }}
             onFocus={(e) => {
-              e.target.value = serializeSegments(segments);
+              e.target.value = serializeSegments(segments, lists);
             }}
           />
           <span className="muted" style={{ fontSize: 12 }}>import chord-prose (one change per line, blank line = section break):</span>
@@ -1457,7 +1486,7 @@ export function PracticeTab(props: PracticeSharedProps) {
             onBlur={(e) => {
               const v = e.target.value;
               if (!v.trim()) return;
-              const parsed = parseChordProse(v, proseSpacing || 2, proseReps || 1);
+              const parsed = parseChordProse(v, proseSpacing || 2, proseReps || 1, lists);
               if (parsed.length) {
                 commitSegs(parsed);
                 setSelected(new Set([0]));
@@ -1526,7 +1555,7 @@ export function PracticeTab(props: PracticeSharedProps) {
                       onChange={(e) => patch(i, { scaleId: e.target.value || null })}
                     >
                       <option value="">{s.label ? `— ${s.label} —` : 'none'}</option>
-                      {SCALE_TEMPLATES.map((t) => (
+                      {(lists?.scales ?? SCALE_TEMPLATES).map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
                       ))}
                     </select>
@@ -1534,7 +1563,7 @@ export function PracticeTab(props: PracticeSharedProps) {
                   <td>
                     <select value={s.chordId ?? ''} onChange={(e) => patch(i, { chordId: e.target.value || null })}>
                       <option value="">none</option>
-                      {CHORD_TEMPLATES.map((t) => (
+                      {(lists?.chords ?? CHORD_TEMPLATES).map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
                       ))}
                     </select>
@@ -1574,7 +1603,7 @@ export function PracticeTab(props: PracticeSharedProps) {
                     })
                   }
                 >
-                  {CHORD_TEMPLATES.map((t) => (
+                  {(lists?.chords ?? CHORD_TEMPLATES).map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>

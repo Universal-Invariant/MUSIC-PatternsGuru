@@ -398,6 +398,10 @@ export class FretboardPresenter implements Presenter {
     );
     // User-controlled global dot/text size (the "marker size" slider in the UI).
     const markerScale = scene.markerScale ?? 1;
+    // Independent label font + halo controls (request: font size and border
+    // thickness for scale labels, separate from the dot size).
+    const fontSizeScale = scene.fontSizeScale ?? 1;
+    const haloWidthScale = scene.haloWidthScale ?? 1;
 
     const markers: RenderMarker[] = [];
 
@@ -446,6 +450,8 @@ export class FretboardPresenter implements Presenter {
         effect,
         alpha: outsideWindow ? Math.min(a.alpha, 0.28) : a.alpha,
         scale: a.scale * markerScale,
+        fontSizeScale,
+        haloWidthScale,
         shape: resolveMarkerShape(scene, a),
       });
     }

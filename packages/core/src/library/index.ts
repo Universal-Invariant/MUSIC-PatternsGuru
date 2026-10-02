@@ -8,6 +8,7 @@ export * from './scales.js';
 export * from './chords.js';
 export * from './keys.js';
 export * from './harmony.js';
+export * from './saved.js';
 
 import { createPattern, type Pattern } from '../pattern.js';
 import type { Spelling } from '../spelling.js';

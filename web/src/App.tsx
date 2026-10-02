@@ -21,7 +21,19 @@ import {
 } from '@mpg/core';
 import { ShapePaletteEditor, loadCustomShapePalettes, removeCustomShapePalette } from './ShapePaletteEditor.js';
 import { PracticeTab } from './PracticeTab.js';
-import { CHORD_TEMPLATES, SCALE_TEMPLATES, rootTemplateAt, parsePatternQuery } from '@mpg/core/library';
+import {
+  CHORD_TEMPLATES,
+  SCALE_TEMPLATES,
+  rootTemplateAt,
+  parsePatternQuery,
+  savedFromTemplate,
+  templateFromSaved,
+  newSavedId,
+  parseSavedLibrary,
+  exportSavedLibrary,
+  type SavedPattern,
+  type Template,
+} from '@mpg/core/library';
 import { INSTRUMENTS, listInstruments } from '@mpg/instruments';
 import { FretboardPresenter, FrameSvg, buildScene } from '@mpg/react';
 
@@ -33,6 +45,24 @@ const DEFAULT_CHORD = 'min7';
 const DEFAULT_SECOND_SCALE = 'aeolian';
 
 const presenter = new FretboardPresenter();
+
+/** #2: user library persistence — generic JSON envelope, versioned (see core/library/saved.ts). */
+const USER_LIBRARY_KEY = 'mpg-user-library-v1';
+function loadUserLibrary(): SavedPattern[] {
+  try {
+    const raw = localStorage.getItem(USER_LIBRARY_KEY);
+    return raw ? parseSavedLibrary(raw) : [];
+  } catch {
+    return [];
+  }
+}
+function persistUserLibrary(items: SavedPattern[]): void {
+  try {
+    localStorage.setItem(USER_LIBRARY_KEY, exportSavedLibrary(items));
+  } catch {
+    /* storage full/blocked — in-memory list still works this session */
+  }
+}
 
 interface SelectedInfo {
   readonly patterns: Pattern[];
@@ -54,6 +84,29 @@ export function App() {
   const [secondScaleId, setSecondScaleId] = useState<string | null>(DEFAULT_SECOND_SCALE);
   const [mode, setMode] = useState<NotationMode>('tonal');
   const [markerScale, setMarkerScale] = useState(1);
+  /** #1: independent label font size + halo (border) thickness multipliers. */
+  const [fontSizeScale, setFontSizeScale] = useState(1);
+  const [haloWidthScale, setHaloWidthScale] = useState(1);
+  /** #2: user-saved scale/chord library (localStorage-backed, JSON-shareable). */
+  const [userLibrary, setUserLibrary] = useState<SavedPattern[]>(() => loadUserLibrary());
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  /** Merge imported patterns into the library (re-id on id clash), then persist. */
+  function mergeLibrary(items: SavedPattern[]) {
+    if (items.length === 0) {
+      setImportMsg('no valid patterns found in import');
+      return;
+    }
+    setUserLibrary((prev) => {
+      const existing = new Set(prev.map((p) => p.id));
+      const add = items.map((it) =>
+        existing.has(it.id) ? { ...it, id: newSavedId(it.kind) } : it,
+      );
+      const next = [...prev, ...add];
+      persistUserLibrary(next);
+      return next;
+    });
+    setImportMsg(`imported ${items.length} pattern${items.length === 1 ? '' : 's'} ✓`);
+  }
   const [paletteId, setPaletteId] = useState('tonal-default');
   const [tab, setTab] = useState<'playground' | 'practice'>('playground');
   /** Function-based shape palette id (circles for chord tones, squares for the rest…). */
@@ -81,19 +134,30 @@ export function App() {
   const instrument = INSTRUMENTS[instrumentId] ?? listInstruments()[0]!;
   const palette = PALETTES.find((p) => p.id === paletteId) ?? PALETTES[0]!;
 
+  /** #2: built-in + user-library templates merged so saved scales/chords appear
+   * everywhere a template list is used (selectors, search, progressions). */
+  const scaleTemplates: Template[] = useMemo(
+    () => [...SCALE_TEMPLATES, ...userLibrary.filter((s) => s.kind === 'scale').map(templateFromSaved)],
+    [userLibrary],
+  );
+  const chordTemplates: Template[] = useMemo(
+    () => [...CHORD_TEMPLATES, ...userLibrary.filter((s) => s.kind === 'chord').map(templateFromSaved)],
+    [userLibrary],
+  );
+
   const selection: SelectedInfo = useMemo(() => {
     const patterns: Pattern[] = [];
-    const scaleT = SCALE_TEMPLATES.find((t) => t.id === scaleId);
+    const scaleT = scaleTemplates.find((t) => t.id === scaleId);
     if (scaleT) patterns.push(rootTemplateAt(scaleT, rootIdx));
-    const chordT = chordId ? CHORD_TEMPLATES.find((t) => t.id === chordId) : undefined;
+    const chordT = chordId ? chordTemplates.find((t) => t.id === chordId) : undefined;
     if (chordT) patterns.push(rootTemplateAt(chordT, rootIdx));
-    const secondT = secondScaleId ? SCALE_TEMPLATES.find((t) => t.id === secondScaleId) : undefined;
+    const secondT = secondScaleId ? scaleTemplates.find((t) => t.id === secondScaleId) : undefined;
     if (secondT && patterns.length > 0) {
       // Second scale rooted a perfect 4th up to make overlap analysis interesting.
       patterns.push(rootTemplateAt(secondT, pcAdd(rootIdx, 5)));
     }
     return { patterns };
-  }, [rootIdx, scaleId, chordId, secondScaleId]);
+  }, [rootIdx, scaleId, chordId, secondScaleId, scaleTemplates, chordTemplates]);
 
   const searched: Pattern | undefined = useMemo(() => {
     const trimmed = query.trim();
@@ -103,19 +167,19 @@ export function App() {
     if (parsed) return parsed;
     const q = trimmed.toLowerCase().replace(/\s+/g, '');
     const t =
-      SCALE_TEMPLATES.find((x) => x.id === q || x.name.toLowerCase().replace(/\s+/g, '') === q) ??
-      CHORD_TEMPLATES.find((x) => x.id === q || x.name.toLowerCase().replace(/\s+/g, '') === q);
+      scaleTemplates.find((x) => x.id === q || x.name.toLowerCase().replace(/\s+/g, '') === q) ??
+      chordTemplates.find((x) => x.id === q || x.name.toLowerCase().replace(/\s+/g, '') === q);
     return t ? rootTemplateAt(t, rootIdx) : undefined;
-  }, [query, rootIdx]);
+  }, [query, rootIdx, scaleTemplates, chordTemplates]);
 
   const overlays: Pattern[] = useMemo(() => {
     return overlayList.flatMap((o) => {
-      const t = CHORD_TEMPLATES.find((x) => x.id === o.chord);
+      const t = chordTemplates.find((x) => x.id === o.chord);
       if (!t) return [];
       const rooted = rootTemplateAt(t, pcAdd(rootIdx, o.offset));
       return [{ ...rooted, id: `${rooted.id}+${o.offset}` }];
     });
-  }, [overlayList, rootIdx]);
+  }, [overlayList, rootIdx, chordTemplates]);
 
   const isKeyboard = instrument.layout().metric === 'semitone';
   /** Keyboard: show ~2 octaves by default (cols are semitones); guitar: chosen fret window. */
@@ -148,6 +212,8 @@ export function App() {
       patterns,
       mode,
       markerScale,
+      fontSizeScale,
+      haloWidthScale,
       palette,
       functionShapes: customShapes,
       functionShapeId: customShapes ? undefined : functionShapeId,
@@ -169,6 +235,8 @@ export function App() {
     functionShapeId,
     customShapes,
     markerScale,
+    fontSizeScale,
+    haloWidthScale,
     windowCols,
     box,
     connectors,
@@ -231,6 +299,9 @@ export function App() {
             paletteId={paletteId}
             functionShapeId={functionShapeId}
             markerScale={markerScale}
+            fontSizeScale={fontSizeScale}
+            haloWidthScale={haloWidthScale}
+            lists={{ scales: scaleTemplates, chords: chordTemplates }}
             connectors={connectors}
             background={background}
             effectsOn={effectsOn}
@@ -283,7 +354,7 @@ export function App() {
             <label className="field">
               Primary scale / mode
               <select value={scaleId} onChange={(e) => setScaleId(e.target.value)}>
-                {SCALE_TEMPLATES.map((t) => (
+                {scaleTemplates.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
@@ -298,7 +369,7 @@ export function App() {
                   onChange={(e) => setChordId(e.target.value || null)}
                 >
                   <option value="">none</option>
-                  {CHORD_TEMPLATES.map((t) => (
+                  {chordTemplates.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
                     </option>
@@ -312,7 +383,7 @@ export function App() {
                   onChange={(e) => setSecondScaleId(e.target.value || null)}
                 >
                   <option value="">none</option>
-                  {SCALE_TEMPLATES.map((t) => (
+                  {scaleTemplates.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
                     </option>
@@ -341,7 +412,7 @@ export function App() {
                 <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>none yet</div>
               )}
               {overlayList.map((o, i) => {
-                const t = CHORD_TEMPLATES.find((x) => x.id === o.chord);
+                const t = chordTemplates.find((x) => x.id === o.chord);
                 return (
                   <div key={i} className="overlay-row">
                     <select
@@ -353,7 +424,7 @@ export function App() {
                         )
                       }
                     >
-                      {CHORD_TEMPLATES.map((c) => (
+                      {chordTemplates.map((c) => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
@@ -388,7 +459,7 @@ export function App() {
                   onChange={(e) => setPendingChord(e.target.value)}
                 >
                   <option value="">add chord…</option>
-                  {CHORD_TEMPLATES.map((t) => (
+                  {chordTemplates.map((t) => (
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
@@ -448,6 +519,34 @@ export function App() {
               </label>
             </div>
             <div className="row" style={{ marginTop: 10 }}>
+              <label className="field grow">
+                Label font size <span className="mono">{fontSizeScale.toFixed(2)}×</span>
+                <input
+                  id="font-scale"
+                  type="range"
+                  min={0.6}
+                  max={2}
+                  step={0.01}
+                  value={fontSizeScale}
+                  onInput={(e) => setFontSizeScale(Number(e.currentTarget.value))}
+                  onChange={(e) => setFontSizeScale(Number(e.target.value))}
+                />
+              </label>
+              <label className="field grow">
+                Halo thickness <span className="mono">{haloWidthScale.toFixed(2)}×</span>
+                <input
+                  id="halo-scale"
+                  type="range"
+                  min={0}
+                  max={2.5}
+                  step={0.01}
+                  value={haloWidthScale}
+                  onInput={(e) => setHaloWidthScale(Number(e.currentTarget.value))}
+                  onChange={(e) => setHaloWidthScale(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="row" style={{ marginTop: 10 }}>
               <label className="field">
                 Palette
                 <select value={paletteId} onChange={(e) => setPaletteId(e.target.value)}>
@@ -500,6 +599,142 @@ export function App() {
                 </div>
               </label>
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>My Library</h2>
+            {/* #2: save/share scale+chord definitions. Generic record format — new
+                fields ride along in `extra` without touching the save routine. */}
+            <div className="row" style={{ marginBottom: 8 }}>
+              <button
+                className="btn small"
+                onClick={() => {
+                  const t = scaleTemplates.find((x) => x.id === scaleId);
+                  if (!t) return;
+                  const base = prompt('Save scale as…', `${ROOT_NAMES[rootIdx] ?? ''} ${t.name}`.trim());
+                  if (!base) return;
+                  const item = { ...savedFromTemplate(t, rootIdx),  id: newSavedId(t.kind), name: base };
+                  const next = [...userLibrary, item];
+                  setUserLibrary(next);
+                  persistUserLibrary(next);
+                }}
+              >
+                Save current scale
+              </button>
+              <button
+                className="btn small"
+                disabled={!chordId}
+                onClick={() => {
+                  const t = chordTemplates.find((x) => x.id === chordId);
+                  if (!t) return;
+                  const base = prompt('Save chord as…', `${ROOT_NAMES[rootIdx] ?? ''} ${t.name}`.trim());
+                  if (!base) return;
+                  const item = { ...savedFromTemplate(t, rootIdx),  id: newSavedId(t.kind), name: base };
+                  const next = [...userLibrary, item];
+                  setUserLibrary(next);
+                  persistUserLibrary(next);
+                }}
+              >
+                Save current chord
+              </button>
+            </div>
+            {userLibrary.length === 0 ? (
+              <div className="muted" style={{ fontSize: 12 }}>
+                no saved scales/chords yet — save the current ones above, or import a file from a friend
+              </div>
+            ) : (
+              <ul className="library-list">
+                {userLibrary.map((s) => (
+                  <li key={s.id}>
+                    <span className={`kind-badge ${s.kind === 'chord' ? 'chord' : 'scale'}`}>{s.kind}</span>
+                    <span className="mono">{s.steps.join(' · ')}</span>
+                    <span className="grow" />
+                    <button
+                      className="btn small danger"
+                      onClick={() => {
+                        const next = userLibrary.filter((x) => x.id !== s.id);
+                        setUserLibrary(next);
+                        persistUserLibrary(next);
+                        if (scaleId === s.id) setScaleId(DEFAULT_SCALE);
+                        if (chordId === s.id) setChordId(null);
+                        setSecondScaleId((v) => (v === s.id ? null : v));
+                        setOverlayList((list) => list.filter((o) => o.chord !== s.id));
+                      }}
+                    >
+                      remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                className="btn small"
+                disabled={userLibrary.length === 0}
+                onClick={() => {
+                  navigator.clipboard?.writeText(exportSavedLibrary(userLibrary)).then(
+                    () => setImportMsg('Library copied to clipboard ✓'),
+                    () => setImportMsg('clipboard unavailable — use “Export file” instead'),
+                  );
+                }}
+              >
+                copy JSON
+              </button>
+              <button
+                className="btn small"
+                disabled={userLibrary.length === 0}
+                onClick={() => {
+                  const blob = new Blob([exportSavedLibrary(userLibrary)], { type: 'application/json' });
+                  const a = document.createElement('a');
+                  a.href = URL.createObjectURL(blob);
+                  a.download = 'mpg-library.json';
+                  a.click();
+                  URL.revokeObjectURL(a.href);
+                }}
+              >
+                Export file
+              </button>
+              <label className="btn small" style={{ cursor: 'pointer' }}>
+                Import file
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    try {
+                      const items = parseSavedLibrary(await f.text());
+                      mergeLibrary(items);
+                    } catch (err) {
+                      setImportMsg(`import failed: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </div>
+            <details style={{ marginTop: 8 }}>
+              <summary className="muted" style={{ fontSize: 12 }}>paste JSON to import</summary>
+              <textarea
+                rows={4}
+                style={{ width: '100%', marginTop: 6, fontFamily: 'monospace', fontSize: 11 }}
+                placeholder='{"format":"mpg-library","version":1,"patterns":[…]}'
+                onBlur={(e) => {
+                  const txt = e.target.value.trim();
+                  if (!txt) return;
+                  try {
+                    mergeLibrary(parseSavedLibrary(txt));
+                    e.target.value = '';
+                  } catch (err) {
+                    setImportMsg(`import failed: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }}
+              />
+            </details>
+            {importMsg && (
+              <div style={{ fontSize: 12, marginTop: 6, color: '#9fd3a4' }}>{importMsg}</div>
+            )}
           </section>
 
           <section className="panel">

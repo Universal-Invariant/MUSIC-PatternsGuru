@@ -109,6 +109,10 @@ export interface BuildSceneOptions {
   includeAllCandidates?: boolean;
   /** Global dot/text size multiplier (UI slider). */
   markerScale?: number;
+  /** Label font-size multiplier, independent of dot size (UI slider). */
+  fontSizeScale?: number;
+  /** Label halo/outline thickness multiplier (UI slider). */
+  haloWidthScale?: number;
   /** Marker shape palette (UI dropdown). Undefined = discs. */
   shapes?: ShapePalette;
   /**
@@ -243,6 +247,8 @@ export function buildScene(instrument: Instrument, options: BuildSceneOptions): 
     showBackground: toggles.background,
     includeAllCandidates: includeAll,
     markerScale: options.markerScale ?? 1,
+    fontSizeScale: options.fontSizeScale ?? 1,
+    haloWidthScale: options.haloWidthScale ?? 1,
     shapes: options.shapes,
     functionShapes:
       options.functionShapes ??

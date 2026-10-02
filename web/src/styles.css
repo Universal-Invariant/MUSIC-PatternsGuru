@@ -748,3 +748,10 @@ table.prog-grid {
 .row.end { justify-content: flex-end; gap: 8px; }
 .btn.primary { background: var(--accent, #4f8cff); color: #fff; border-color: transparent; }
 .btn.danger { background: transparent; color: #ff6b6b; border-color: #ff6b6b55; }
+
+/* #2: My Library panel */
+.library-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.library-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.kind-badge { text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; padding: 1px 6px; border-radius: 8px; background: rgba(120,180,255,0.15); color: #9ecbff; }
+.kind-badge.chord { background: rgba(255,180,120,0.15); color: #ffcf9e; }
+.grow { flex: 1; }

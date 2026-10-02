@@ -292,6 +292,10 @@ export function shapePathFor(shape: MarkerShape, x: number, y: number, r: number
 function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: string) => void }) {
   const { x, y } = centerOf(m, h);
   const r = (Math.min(h.cellW, h.cellH) * 0.38) * (m.scale ?? 1);
+  // Label font size and halo thickness are independently configurable so users
+  // can enlarge small degree/interval text without growing the dot itself.
+  const fontScale = m.fontSizeScale ?? 1;
+  const haloScale = m.haloWidthScale ?? 1;
   const c = m.content;
   const alpha = m.alpha ?? 1;
   const glowing = m.effect && m.effect.kind === 'glow';
@@ -324,11 +328,11 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
           x={x}
           y={c.sub ? y - 1 : y + 4}
           textAnchor="middle"
-          fontSize={r * 1.05}
+          fontSize={r * 1.05 * fontScale}
           fontWeight={c.isRoot ? 800 : 600}
           fill={c.isRoot ? '#1a1400' : '#0c0f12'}
           stroke={haloColor}
-          strokeWidth={Math.max(1.5, r * 0.3)}
+          strokeWidth={Math.max(1.5, r * 0.3) * haloScale}
           strokeLinejoin="round"
           style={{ paintOrder: 'stroke', pointerEvents: 'none', userSelect: 'none' }}
         >
@@ -340,11 +344,11 @@ function Marker({ m, h, onClick }: { m: RenderMarker; h: Hints; onClick?: (id: s
           x={x}
           y={y + r * 0.85}
           textAnchor="middle"
-          fontSize={r * 0.55}
+          fontSize={r * 0.55 * fontScale}
           fill="#0c0f12"
           opacity={0.9}
           stroke={haloColor}
-          strokeWidth={Math.max(1, r * 0.18)}
+          strokeWidth={Math.max(1, r * 0.18) * haloScale}
           strokeLinejoin="round"
           style={{ paintOrder: 'stroke', pointerEvents: 'none', userSelect: 'none' }}
         >
